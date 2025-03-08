@@ -1,12 +1,11 @@
-using System.Net.Sockets;
 using System.Text;
 
 namespace GossNet.Protocol;
 
-public class GossNetNode<T> : IDisposable where T : GossNetMessageBase, new()
+public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new()
 {
     private  readonly GossNetConfiguration _configuration;
-    private readonly UdpClient _udpClient;
+    private readonly IUdpClient _udpClient;
     private CancellationTokenSource? _cancellationTokenSource;
     private Task? _processingTask;
     private event EventHandler<GossNetMessageReceivedEventArgs<T>>? GossNetMessageReceived;
@@ -14,10 +13,10 @@ public class GossNetNode<T> : IDisposable where T : GossNetMessageBase, new()
     private readonly SemaphoreSlim _udpClientReceiveSemaphoreSlim = new(1, 1);
     private readonly SemaphoreSlim _udpClientSendSemaphoreSlim = new(1, 1);
 
-    public GossNetNode(GossNetConfiguration configuration)
+    public GossNetNode(GossNetConfiguration configuration, IUdpClient? udpClient = null)
     {
         _configuration = configuration;
-        _udpClient = new UdpClient( _configuration.Port);
+        _udpClient = udpClient ?? new UdpClientAdapter(configuration.Port);
         _udpClient.EnableBroadcast = true;
     }
     
@@ -58,7 +57,7 @@ public class GossNetNode<T> : IDisposable where T : GossNetMessageBase, new()
         return await SocializeMessageAsync(message);
     }
     
-    protected virtual async Task<T> ReceiveAsync()
+    private async Task<T> ReceiveAsync()
     {
         T resultMessage;
         
@@ -112,7 +111,7 @@ public class GossNetNode<T> : IDisposable where T : GossNetMessageBase, new()
         }
     }
     
-    protected virtual async Task<int> ProcessMessageAsync(T message)
+    private async Task<int> ProcessMessageAsync(T message)
     {
         MarkSelfAsNotified(message);
         
@@ -148,7 +147,7 @@ public class GossNetNode<T> : IDisposable where T : GossNetMessageBase, new()
         }
     }
     
-    protected virtual async Task<int> SocializeMessageAsync(T message)
+    private async Task<int> SocializeMessageAsync(T message)
     {
         var data = Encoding.UTF8.GetBytes(message.Serialize());
         
