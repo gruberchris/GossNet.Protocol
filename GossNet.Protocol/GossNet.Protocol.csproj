@@ -6,4 +6,13 @@
         <Nullable>enable</Nullable>
     </PropertyGroup>
 
+    <PropertyGroup>
+        <PackageId>GossNet.Protocol</PackageId>
+        <Authors>Chris Gruber</Authors>
+        <Description>GossNet protocol implementation</Description>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <PackageProjectUrl>https://github.com/gruberchris/GossNet.Protocol</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/gruberchris/GossNet.Protocol</RepositoryUrl>
+        <PackageTags>gossip;network;protocol</PackageTags>
+    </PropertyGroup>
 </Project>
