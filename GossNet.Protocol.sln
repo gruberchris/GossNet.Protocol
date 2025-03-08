@@ -1,0 +1,22 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GossNet.Protocol", "GossNet.Protocol\GossNet.Protocol.csproj", "{CEB49A76-5A41-4B24-AEED-CAE44BFA68B4}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GossNet.Protocol.Tests", "GossNet.Protocol.Tests\GossNet.Protocol.Tests.csproj", "{A504339D-EB09-468A-81F3-ACC5BC01A7F1}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{CEB49A76-5A41-4B24-AEED-CAE44BFA68B4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CEB49A76-5A41-4B24-AEED-CAE44BFA68B4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CEB49A76-5A41-4B24-AEED-CAE44BFA68B4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CEB49A76-5A41-4B24-AEED-CAE44BFA68B4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A504339D-EB09-468A-81F3-ACC5BC01A7F1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A504339D-EB09-468A-81F3-ACC5BC01A7F1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A504339D-EB09-468A-81F3-ACC5BC01A7F1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A504339D-EB09-468A-81F3-ACC5BC01A7F1}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
