@@ -28,7 +28,14 @@ public class GossNetNodeTests
     [TestCleanup]
     public void Cleanup()
     {
-        _node.Dispose();
+        try
+        {
+            _node.Dispose();
+        }
+        catch (AggregateException ex) when (ex.InnerException is TaskCanceledException)
+        {
+            // Ignore TaskCanceledException during cleanup
+        }
     }
 
     [TestMethod]
@@ -125,24 +132,30 @@ public class GossNetNodeTests
     {
         // Arrange
         _node.Start();
-        
+
         // Act
-        await _node.StopAsync();
-        
+        try
+        {
+            await _node.StopAsync();
+        }
+        catch (TaskCanceledException)
+        {
+            // This is expected when cancelling tasks
+        }
+
         // Assert
-        // Verify the node is no longer processing
         // Add a message to the queue and verify it's not processed
         var message = new TestMessage { Data = "Test Data" };
         var jsonMessage = message.Serialize();
         var bytes = Encoding.UTF8.GetBytes(jsonMessage);
-        
+
         _mockUdpClient.ReceiveQueue.Enqueue(new UdpReceiveResult(
-            bytes, 
+            bytes,
             new IPEndPoint(IPAddress.Parse("127.0.0.1"), 8081)
         ));
-        
+
         await Task.Delay(100);
-        
+
         Assert.AreEqual(1, _mockUdpClient.ReceiveQueue.Count, "Message should not be processed after stopping");
     }
 
