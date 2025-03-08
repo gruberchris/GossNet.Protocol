@@ -2,6 +2,7 @@ name: Release
 
 permissions:
   contents: write
+  packages: write 
 
 on:
   push:
@@ -48,7 +49,7 @@ jobs:
           gh release create v${{ env.GitVersion_MajorMinorPatch }} \
             --title "Release v${{ env.GitVersion_MajorMinorPatch }}" \
             --generate-notes
-   
+
           gh release upload v${{ env.GitVersion_MajorMinorPatch }} \
             ./GossNet.Protocol.${{ steps.gitversion.outputs.semVer }}.nupkg
         env:
@@ -59,7 +60,7 @@ jobs:
 
       - name: Push to GitHub Packages
         run: |
-          dotnet nuget push "*.nupkg" \
-            --source https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json \
-            --api-key ${{ secrets.GITHUB_TOKEN }} \
-            --skip-duplicate
+          dotnet nuget add source --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text --name github "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
+          
+          # Push package
+          dotnet nuget push "*.nupkg" --source github --skip-duplicate
