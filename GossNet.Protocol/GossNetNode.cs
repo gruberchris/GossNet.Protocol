@@ -52,8 +52,6 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     {
         MarkSelfAsNotified(message);
         
-        await InvokeGossNetMessageReceivedAsync(new GossNetMessageReceivedEventArgs<T> { Message = message });
-        
         return await SocializeMessageAsync(message);
     }
     
@@ -89,7 +87,7 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
             while (!token.IsCancellationRequested)
             {
                 var message = await ReceiveAsync();
-                var result = await ProcessMessageAsync(message);
+                await ProcessMessageAsync(message);
             }
         }, token);
     }
