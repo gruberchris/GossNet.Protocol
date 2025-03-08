@@ -1,5 +1,8 @@
 name: Release
 
+permissions:
+  contents: write
+  
 on:
   push:
     branches: [ main ]
@@ -41,15 +44,12 @@ jobs:
         run: dotnet pack --configuration Release --no-build /p:Version=${{ steps.gitversion.outputs.semVer }} --output .
 
       - name: Create Release
-        uses: actions/create-release@v1
-        id: create_release
+        run: |
+          gh release create v${{ env.GitVersion_MajorMinorPatch }} \
+            --title "Release v${{ env.GitVersion_MajorMinorPatch }}" \
+            --generate-notes
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: v${{ steps.gitversion.outputs.semVer }}
-          release_name: Release v${{ steps.gitversion.outputs.semVer }}
-          draft: false
-          prerelease: false
 
       - name: Upload Release Asset
         uses: actions/upload-release-asset@v1
