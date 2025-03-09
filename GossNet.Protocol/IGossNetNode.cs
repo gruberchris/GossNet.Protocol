@@ -1,3 +1,5 @@
+using System.Threading.Channels;
+
 namespace GossNet.Protocol;
 
 public interface IGossNetNode<T> : IDisposable where T : GossNetMessageBase, new()
@@ -5,14 +7,13 @@ public interface IGossNetNode<T> : IDisposable where T : GossNetMessageBase, new
     /// <summary>
     /// Subscribes to incoming GossNet messages.
     /// </summary>
-    /// <param name="handler">The event handler to be called when messages are received.</param>
-    Task SubscribeAsync(EventHandler<GossNetMessageReceivedEventArgs<T>> handler);
+    Task<ChannelReader<GossNetMessageReceivedEventArgs<T>>> SubscribeAsync();
     
     /// <summary>
     /// Unsubscribes from incoming GossNet messages.
     /// </summary>
-    /// <param name="handler">The event handler to be removed.</param>
-    Task UnsubscribeAsync(EventHandler<GossNetMessageReceivedEventArgs<T>> handler);
+    /// <param name="reader">The channel reader.</param>
+    Task UnsubscribeAsync(ChannelReader<GossNetMessageReceivedEventArgs<T>> reader);
     
     /// <summary>
     /// Sends a message to other nodes in the network.
