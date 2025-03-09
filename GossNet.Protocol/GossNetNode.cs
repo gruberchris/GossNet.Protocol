@@ -11,6 +11,8 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     private CancellationTokenSource? _cancellationTokenSource;
     private Task? _processingTask;
     private event EventHandler<GossNetMessageReceivedEventArgs<T>>? GossNetMessageReceived;
+    private readonly ExpiringMessageCache<T> _processedMessages;
+    
     private readonly SemaphoreSlim _gossNetMessageReceivedSemaphoreSlim = new(1, 1);
     private readonly SemaphoreSlim _udpClientReceiveSemaphoreSlim = new(1, 1);
     private readonly SemaphoreSlim _udpClientSendSemaphoreSlim = new(1, 1);
@@ -21,6 +23,10 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
         _udpClient = udpClient ?? new UdpClientAdapter(configuration.Port);
         _udpClient.EnableBroadcast = true;
         _logger = logger ?? NullLoggerFactory.Instance.CreateLogger<GossNetNode<T>>();
+        _processedMessages = new ExpiringMessageCache<T>(
+            TimeSpan.FromSeconds(configuration.MessageTtlSeconds > 0 
+                ? configuration.MessageTtlSeconds 
+                : 300)); // Default 5 minutes
         
         _logger.LogDebug("GossNetNode initialized on {Hostname}:{Port}", configuration.Hostname, configuration.Port);
     }
@@ -60,6 +66,7 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
         _logger.LogDebug("Sending message: {Data}", message.Serialize());
         
         MarkSelfAsNotified(message);
+        _processedMessages.TryAdd(message);
 
         var result = await SocializeMessageAsync(message);
         _logger.LogDebug("Message sent to {Count} neighbors: {Neighbors}", result, string.Join(", ", message.NotifiedNodes));
@@ -164,6 +171,12 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     private async Task<int> ProcessMessageAsync(T message)
     {
         _logger.LogDebug("Processing received message: {Data}", message.Serialize());
+        
+        if (!_processedMessages.TryAdd(message))
+        {
+            _logger.LogDebug("Ignoring previously processed message id: {Id}", message.Id);
+            return 0;
+        }
         
         MarkSelfAsNotified(message);
 
