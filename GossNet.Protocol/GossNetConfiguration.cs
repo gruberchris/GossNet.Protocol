@@ -18,4 +18,6 @@ public class GossNetConfiguration
     public NodeDiscovery NodeDiscovery { get; init; }
     
     public  IEnumerable<GossNetNodeHostEntry> StaticNodes { get; init; } = new List<GossNetNodeHostEntry>();
+    
+    public int MessageTtlSeconds { get; init; } = 600;   // Default 10 minutes
 }

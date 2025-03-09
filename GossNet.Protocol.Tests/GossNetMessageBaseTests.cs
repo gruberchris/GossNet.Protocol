@@ -10,6 +10,16 @@ public sealed class GossNetMessageBaseTests
     {
         public string Content { get; set; } = string.Empty;
         
+        // Helper methods for testing to work around property access restrictions
+        public void SetId(Guid id) => 
+            typeof(GossNetMessageBase).GetProperty(nameof(Id))?.SetValue(this, id);
+        
+        public void SetTimestamp(DateTime timestamp) => 
+            typeof(GossNetMessageBase).GetProperty(nameof(Timestamp))?.SetValue(this, timestamp);
+        
+        public void SetNotifiedNodes(IEnumerable<GossNetNodeHostEntry> nodes) => 
+            typeof(GossNetMessageBase).GetProperty(nameof(NotifiedNodes))?.SetValue(this, nodes);
+        
         public override string Serialize()
         {
             return $"{Id}|{Timestamp:o}|{Content}";
@@ -21,11 +31,8 @@ public sealed class GossNetMessageBaseTests
 
             if (parts.Length < 3) return;
             
-            Id = Guid.Parse(parts[0]);
-            
-            // Parse as UTC time and keep it as UTC
-            Timestamp = DateTime.Parse(parts[1], CultureInfo.InvariantCulture).ToUniversalTime();
-            
+            SetId(Guid.Parse(parts[0]));
+            SetTimestamp(DateTime.Parse(parts[1], CultureInfo.InvariantCulture).ToUniversalTime());
             Content = parts[2];
         }
     }
@@ -50,7 +57,7 @@ public sealed class GossNetMessageBaseTests
         var newId = Guid.NewGuid();
         
         // Act
-        message.Id = newId;
+        message.SetId(newId);
         
         // Assert
         Assert.AreEqual(newId, message.Id);
@@ -64,7 +71,7 @@ public sealed class GossNetMessageBaseTests
         var newTimestamp = new DateTime(2023, 1, 1, 12, 0, 0, DateTimeKind.Utc);
         
         // Act
-        message.Timestamp = newTimestamp;
+        message.SetTimestamp(newTimestamp);
         
         // Assert
         Assert.AreEqual(newTimestamp, message.Timestamp);
@@ -82,7 +89,7 @@ public sealed class GossNetMessageBaseTests
         };
         
         // Act
-        message.NotifiedNodes = nodes;
+        message.SetNotifiedNodes(nodes);
         
         // Assert
         Assert.AreEqual(2, message.NotifiedNodes.Count());
@@ -93,12 +100,10 @@ public sealed class GossNetMessageBaseTests
     public void Serialize_WithDefaultValues_ReturnsExpectedString()
     {
         // Arrange
-        var message = new TestMessage
-        {
-            Id = Guid.Parse("12345678-1234-1234-1234-123456789012"),
-            Timestamp = new DateTime(2023, 1, 1, 12, 0, 0, DateTimeKind.Utc),
-            Content = "Test Content"
-        };
+        var message = new TestMessage();
+        message.SetId(Guid.Parse("12345678-1234-1234-1234-123456789012"));
+        message.SetTimestamp(new DateTime(2023, 1, 1, 12, 0, 0, DateTimeKind.Utc));
+        message.Content = "Test Content";
 
         // Act
         var result = message.Serialize();
