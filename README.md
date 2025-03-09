@@ -62,10 +62,12 @@ public class ChatMessage : GossNetMessageBase
 
 2. Create a GossNet Node
 
-Next, create a GossNet node and configure it to send and receive messages:
+Next, create a GossNet node and configure it to send and receive messages. You can subscribe to incoming messages using a channel and process them in a background task:
 
 ```csharp
 using GossNet.Protocol;
+using System.Threading.Channels;
+using System.Threading.Tasks;
 
 // Create configuration
 var config = new GossNetConfiguration
@@ -81,22 +83,35 @@ var config = new GossNetConfiguration
 // Create and start a node
 using var node = new GossNetNode<ChatMessage>(config);
 
-// Subscribe to incoming messages
-await node.SubscribeAsync((sender, args) => 
+// Subscribe to incoming messages using channel
+var reader = await node.SubscribeAsync();
+
+// Start background task to process messages from channel
+_ = Task.Run(async () =>
 {
-    var message = args.Message;
-    Console.WriteLine($"[{message.Timestamp}] {message.Username}: {message.Content}");
+    try
+    {
+        await foreach (var args in reader.ReadAllAsync())
+        {
+            var message = args.Message;
+            Console.WriteLine($"[{message.Timestamp} on Node 1] {message.Username}: {message.Content}");
+        }
+    }
+    catch (OperationCanceledException)
+    {
+        // Channel was completed or cancelled
+    }
 });
 
 // Start the node
 node.Start();
 
-// Create configuration
+// Create configuration for second node
 var config2 = new GossNetConfiguration
 {
-    Hostname = "localhost",  // This node's hostname
-    Port = 5056,             // This node's port
-    Neighbours = new[]       // Other nodes in the network
+    Hostname = "localhost",
+    Port = 5056,
+    Neighbours = new[]
     {
         new GossNetNodeHostEntry { Hostname = "localhost", Port = 5055 }
     }
@@ -105,11 +120,24 @@ var config2 = new GossNetConfiguration
 // Create and start a second node
 using var node2 = new GossNetNode<ChatMessage>(config2);
 
-// Subscribe to incoming messages
-await node2.SubscribeAsync((sender, args) => 
+// Subscribe to incoming messages using channel
+var reader2 = await node2.SubscribeAsync();
+
+// Start background task to process messages from channel
+_ = Task.Run(async () =>
 {
-    var message = args.Message;
-    Console.WriteLine($"[{message.Timestamp}] {message.Username}: {message.Content}");
+    try
+    {
+        await foreach (var args in reader2.ReadAllAsync())
+        {
+            var message = args.Message;
+            Console.WriteLine($"[{message.Timestamp} on Node 2] {message.Username}: {message.Content}");
+        }
+    }
+    catch (OperationCanceledException)
+    {
+        // Channel was completed or cancelled
+    }
 });
 
 // Start the node
@@ -121,6 +149,7 @@ var msg = new ChatMessage
     Username = "Alice",
     Content = "Hello, distributed world!"
 };
+
 await node.SendAsync(msg);
 ```
 
@@ -148,7 +177,7 @@ This epidemic spreading ensures the message reaches all nodes in the network eff
 - Thread-safe design with proper synchronization
 - Automatic handling of duplicate messages
 - Custom message types through generic implementation
-- Simple subscription model for message handling
+- Simple subscription model for message handling using .NET channels
 
 ## Service Discovery
 

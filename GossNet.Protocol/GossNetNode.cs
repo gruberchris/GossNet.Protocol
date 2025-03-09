@@ -1,4 +1,5 @@
 using System.Text;
+using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 
 namespace GossNet.Protocol;
@@ -10,10 +11,13 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     private readonly ILogger<GossNetNode<T>> _logger;
     private CancellationTokenSource? _cancellationTokenSource;
     private Task? _processingTask;
-    private event EventHandler<GossNetMessageReceivedEventArgs<T>>? GossNetMessageReceived;
     private readonly ExpiringMessageCache<T> _processedMessages;
     
-    private readonly SemaphoreSlim _gossNetMessageReceivedSemaphoreSlim = new(1, 1);
+    // Replace EventHandler with Channel
+    private readonly Channel<GossNetMessageReceivedEventArgs<T>> _messageChannel;
+    private readonly List<ChannelReader<GossNetMessageReceivedEventArgs<T>>> _subscribers = new();
+    
+    private readonly SemaphoreSlim _channelSubscribersSemaphoreSlim = new(1, 1);
     private readonly SemaphoreSlim _udpClientReceiveSemaphoreSlim = new(1, 1);
     private readonly SemaphoreSlim _udpClientSendSemaphoreSlim = new(1, 1);
 
@@ -23,54 +27,60 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
         _udpClient = udpClient ?? new UdpClientAdapter(configuration.Port);
         _udpClient.EnableBroadcast = true;
         _logger = logger ?? NullLoggerFactory.Instance.CreateLogger<GossNetNode<T>>();
+
         _processedMessages = new ExpiringMessageCache<T>(
-            TimeSpan.FromSeconds(configuration.MessageTtlSeconds > 0 
-                ? configuration.MessageTtlSeconds 
-                : 300)); // Default 5 minutes
+            TimeSpan.FromSeconds(configuration.MessageTtlSeconds));
         
+        _messageChannel = Channel.CreateUnbounded<GossNetMessageReceivedEventArgs<T>>(
+            new UnboundedChannelOptions { SingleReader = false, SingleWriter = true });
+
         _logger.LogDebug("GossNetNode initialized on {Hostname}:{Port}", configuration.Hostname, configuration.Port);
     }
 
-    public async Task SubscribeAsync(EventHandler<GossNetMessageReceivedEventArgs<T>> handler)
+    public async Task<ChannelReader<GossNetMessageReceivedEventArgs<T>>> SubscribeAsync()
     {
-        await _gossNetMessageReceivedSemaphoreSlim.WaitAsync();
-
+        await _channelSubscribersSemaphoreSlim.WaitAsync();
+        
         try
         {
-            GossNetMessageReceived += handler;
-            _logger.LogDebug("Event handler subscribed");
+            var reader = _messageChannel.Reader;
+            _subscribers.Add(reader);
+            _logger.LogDebug("Channel subscriber added");
+            return reader;
         }
         finally
         {
-            _gossNetMessageReceivedSemaphoreSlim.Release();
+            _channelSubscribersSemaphoreSlim.Release();
         }
     }
 
-    public async Task UnsubscribeAsync(EventHandler<GossNetMessageReceivedEventArgs<T>> handler)
+    public async Task UnsubscribeAsync(ChannelReader<GossNetMessageReceivedEventArgs<T>> reader)
     {
-        await _gossNetMessageReceivedSemaphoreSlim.WaitAsync();
-
+        await _channelSubscribersSemaphoreSlim.WaitAsync();
+        
         try
         {
-            GossNetMessageReceived -= handler;
-            _logger.LogDebug("Event handler unsubscribed");
+            if (_subscribers.Remove(reader))
+            {
+                _logger.LogDebug("Channel subscriber removed");
+            }
         }
         finally
         {
-            _gossNetMessageReceivedSemaphoreSlim.Release();
+            _channelSubscribersSemaphoreSlim.Release();
         }
     }
 
     public async Task<int> SendAsync(T message)
     {
         _logger.LogDebug("Sending message: {Data}", message.Serialize());
-        
+
         MarkSelfAsNotified(message);
         _processedMessages.TryAdd(message);
 
         var result = await SocializeMessageAsync(message);
         _logger.LogDebug("Message sent to {Count} neighbors: {Neighbors}", result, string.Join(", ", message.NotifiedNodes));
-        
+
         return result;
     }
 
@@ -85,7 +95,7 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
             var result = await _udpClient.ReceiveAsync();
             var data = Encoding.UTF8.GetString(result.Buffer);
             _logger.LogTrace("Received message from {EndPoint}: {Data}", result.RemoteEndPoint, data);
-            
+
             var message = new T();
             message.Deserialize(data);
             resultMessage = message;
@@ -106,14 +116,14 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     public void Start()
     {
         _logger.LogInformation("Starting GossNetNode: {Hostname}:{Port}", _configuration.Hostname, _configuration.Port);
-        
+
         _cancellationTokenSource = new CancellationTokenSource();
         var token = _cancellationTokenSource.Token;
 
         _processingTask = Task.Run(async () =>
         {
             _logger.LogDebug("Message processing loop started");
-            
+
             while (!token.IsCancellationRequested)
             {
                 try
@@ -131,7 +141,7 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
                     _logger.LogError(ex, "Error in message processing loop: {Message}", ex.Message);
                 }
             }
-            
+
             _logger.LogDebug("Message processing loop ended");
         }, token);
     }
@@ -139,7 +149,7 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     public async Task StopAsync()
     {
         _logger.LogInformation("Stopping GossNetNode on {Hostname}:{Port}", _configuration.Hostname, _configuration.Port);
-        
+
         if (_cancellationTokenSource != null)
         {
             await _cancellationTokenSource.CancelAsync();
@@ -164,6 +174,9 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
             _cancellationTokenSource = null;
             _processingTask = null;
             
+            // Complete the channel when stopping
+            _messageChannel.Writer.Complete();
+
             _logger.LogDebug("GossNetNode stopped");
         }
     }
@@ -171,22 +184,39 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     private async Task<int> ProcessMessageAsync(T message)
     {
         _logger.LogDebug("Processing received message: {Data}", message.Serialize());
-        
+
         if (!_processedMessages.TryAdd(message))
         {
             _logger.LogDebug("Ignoring previously processed message id: {Id}", message.Id);
             return 0;
         }
-        
+
         MarkSelfAsNotified(message);
 
-        await InvokeGossNetMessageReceivedAsync(new GossNetMessageReceivedEventArgs<T> { Message = message });
+        // Write to channel instead of invoking event
+        var args = new GossNetMessageReceivedEventArgs<T> { Message = message };
+        await WriteToChannelAsync(args);
 
         var result = await SocializeMessageAsync(message);
-        
+
         _logger.LogDebug("Message processed and forwarded to {Count} nodes", result);
-        
+
         return result;
+    }
+
+    private async Task WriteToChannelAsync(GossNetMessageReceivedEventArgs<T> args)
+    {
+        try
+        {
+            _logger.LogTrace("Writing message to channel");
+            await _messageChannel.Writer.WriteAsync(args);
+            _logger.LogTrace("Message written to channel successfully");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error writing to message channel");
+            throw;
+        }
     }
 
     private void MarkSelfAsNotified(T message)
@@ -197,28 +227,8 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
                 Hostname = _configuration.Hostname,
                 Port = _configuration.Port
             }).ToArray();
-            
+
             _logger.LogTrace("Marked self ({Host}:{Port}) as notified for message id: {Id}", _configuration.Hostname, _configuration.Port, message.Id);
-        }
-    }
-
-    private async Task InvokeGossNetMessageReceivedAsync(GossNetMessageReceivedEventArgs<T> args)
-    {
-        await _gossNetMessageReceivedSemaphoreSlim.WaitAsync();
-
-        try
-        {
-            _logger.LogTrace("Invoking message received handlers");
-            GossNetMessageReceived?.Invoke(this, args);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error invoking message received handlers");
-            throw;
-        }
-        finally
-        {
-            _gossNetMessageReceivedSemaphoreSlim.Release();
         }
     }
 
@@ -249,11 +259,11 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
             {
                 _logger.LogTrace("Sending message id: {Id} to {Host}:{Port}", message.Id, hostname, port);
                 var result = await _udpClient.SendAsync(data, data.Length, hostname, port);
-                
+
                 if (result > 0)
                 {
                     sentCount++;
-                    _logger.LogTrace("Successfully sent message id: {Id} as  {Bytes} bytes to {Host}:{Port}",  message.Id, result, hostname, port);
+                    _logger.LogTrace("Successfully sent message id: {Id} as {Bytes} bytes to {Host}:{Port}", message.Id, result, hostname, port);
                 }
             }
             catch (Exception ex)
@@ -280,13 +290,14 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
         if (!disposing) return;
 
         _logger.LogInformation("Disposing GossNetNode");
-        
+
         try
         {
             _cancellationTokenSource?.Cancel();
             _processingTask?.Wait(TimeSpan.FromSeconds(5));
             _udpClient.Dispose();
             _cancellationTokenSource?.Dispose();
+            _messageChannel.Writer.Complete();
         }
         catch (Exception ex)
         {
