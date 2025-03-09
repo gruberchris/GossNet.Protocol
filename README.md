@@ -65,92 +65,106 @@ public class ChatMessage : GossNetMessageBase
 Next, create a GossNet node and configure it to send and receive messages. You can subscribe to incoming messages using a channel and process them in a background task:
 
 ```csharp
+using GossNet;
 using GossNet.Protocol;
-using System.Threading.Channels;
-using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Serilog;
+using Serilog.Events;
 
-// Create configuration
-var config = new GossNetConfiguration
-{
-    Hostname = "localhost",  // This node's hostname
-    Port = 5055,             // This node's port
-    Neighbours = new[]       // Other nodes in the network
-    {
-        new GossNetNodeHostEntry { Hostname = "localhost", Port = 5056 }
-    }
-};
+// Create logger
+var serilogLogger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .WriteTo.Console()
+    .CreateLogger();
 
-// Create and start a node
-using var node = new GossNetNode<ChatMessage>(config);
+// Create Microsoft Extensions Logging factory from Serilog
+var loggerFactory = new LoggerFactory().AddSerilog(serilogLogger);
 
-// Subscribe to incoming messages using channel
-var reader = await node.SubscribeAsync();
+// Create typed logger for GossNetNode<TestMessage>
+var logger = loggerFactory.CreateLogger<GossNetNode<TestMessage>>();
 
-// Start background task to process messages from channel
-_ = Task.Run(async () =>
-{
-    try
-    {
-        await foreach (var args in reader.ReadAllAsync())
-        {
-            var message = args.Message;
-            Console.WriteLine($"[{message.Timestamp} on Node 1] {message.Username}: {message.Content}");
-        }
-    }
-    catch (OperationCanceledException)
-    {
-        // Channel was completed or cancelled
-    }
-});
-
-// Start the node
-node.Start();
-
-// Create configuration for second node
-var config2 = new GossNetConfiguration
+// Create and start nodes
+var node1 = new GossNetNode<TestMessage>(new GossNetConfiguration
 {
     Hostname = "localhost",
-    Port = 5056,
-    Neighbours = new[]
-    {
-        new GossNetNodeHostEntry { Hostname = "localhost", Port = 5055 }
-    }
-};
+    NodeDiscovery = NodeDiscovery.StaticList,
+    StaticNodes = new List<GossNetNodeHostEntry> { new() { Hostname = "localhost", Port = 9056 } }
+}, logger);
 
-// Create and start a second node
-using var node2 = new GossNetNode<ChatMessage>(config2);
+var node2 = new GossNetNode<TestMessage>(new GossNetConfiguration
+{
+    Hostname = "localhost",
+    Port = 9056,
+    NodeDiscovery = NodeDiscovery.StaticList,
+    StaticNodes = new List<GossNetNodeHostEntry> { new() { Hostname = "localhost", Port = 9057 } }
+}, logger);
 
-// Subscribe to incoming messages using channel
-var reader2 = await node2.SubscribeAsync();
+var node3 = new GossNetNode<TestMessage>(new GossNetConfiguration
+{
+    Hostname = "localhost",
+    Port = 9057,
+    NodeDiscovery = NodeDiscovery.StaticList,
+    StaticNodes = new List<GossNetNodeHostEntry> { new() { Hostname = "localhost", Port = 9055 } }
+}, logger);
 
-// Start background task to process messages from channel
+// Start all nodes first
+node1.Start();
+node2.Start();
+node3.Start();
+
+// Setup subscriptions
 _ = Task.Run(async () =>
 {
-    try
+    var reader1 = await node1.SubscribeAsync();
+    await foreach (var messageItem in reader1.ReadAllAsync())
     {
-        await foreach (var args in reader2.ReadAllAsync())
-        {
-            var message = args.Message;
-            Console.WriteLine($"[{message.Timestamp} on Node 2] {message.Username}: {message.Content}");
-        }
-    }
-    catch (OperationCanceledException)
-    {
-        // Channel was completed or cancelled
+        Console.WriteLine($"[{messageItem.Message.Timestamp} on Node 1] {messageItem.Message.Content}");
     }
 });
 
-// Start the node
-node2.Start();
-
-// Send a message
-var msg = new ChatMessage 
+_ = Task.Run(async () =>
 {
-    Username = "Alice",
-    Content = "Hello, distributed world!"
+    var reader2 = await node2.SubscribeAsync();
+    await foreach (var messageItem in reader2.ReadAllAsync())
+    {
+        Console.WriteLine($"[{messageItem.Message.Timestamp} on Node 2] {messageItem.Message.Content}");
+    }
+});
+
+_ = Task.Run(async () =>
+{
+    var reader3 = await node3.SubscribeAsync();
+    await foreach (var messageItem in reader3.ReadAllAsync())
+    {
+        Console.WriteLine($"[{messageItem.Message.Timestamp} on Node 3] {messageItem.Message.Content}");
+    }
+});
+
+// Give some time for nodes to start up and listen for messages
+await Task.Delay(1000);
+
+// Send a message from node 1
+var message = new TestMessage
+{
+    Content = "Hello, world!"
 };
 
-await node.SendAsync(msg);
+await node1.SendAsync(message);
+
+// Keep the program running to observe messages
+Console.WriteLine("Press any key to exit...");
+Console.ReadKey();
+```
+
+When you run this code, you should see the message "Hello, world!" propagated from node 1 to nodes 2 and 3, with each node printing the message to the console.
+
+```text
+[16:31:09 INF] Starting GossNetNode: localhost:9055
+[16:31:09 INF] Starting GossNetNode: localhost:9056
+[16:31:09 INF] Starting GossNetNode: localhost:9057
+[3/9/2025 8:31:10 PM on Node 2] Hello, world!
+[3/9/2025 8:31:10 PM on Node 3] Hello, world!
+Press any key to exit...
 ```
 
 3. Manage Node Lifecycle
