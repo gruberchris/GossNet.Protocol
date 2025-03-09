@@ -1,6 +1,10 @@
 # GossNet.Protocol
 
+[![NuGet](https://img.shields.io/nuget/v/GossNet.Protocol.svg)](https://www.nuget.org/packages/GossNet.Protocol)
+
 GossNet (Gossip Network) is a lightweight C# library implementing the [gossip protocol](https://en.wikipedia.org/wiki/Gossip_protocol) pattern for distributed systems. This library enables efficient message propagation across a network of nodes without the need for centralized coordination.
+
+GossNet.Protocol uses UDP for message communication, allowing for fast and lightweight message passing. It is designed to be simple to use and integrate into existing applications, providing a scalable and resilient communication mechanism for distributed systems. By default, GossNet.Protocol uses UDP port 5055 but this is configurable.
 
 ## What is GossNet?
 
@@ -50,10 +54,7 @@ public class ChatMessage : GossNetMessageBase
             Username = message.Username;
             Content = message.Content;
             
-            // Copy base properties
-            Id = message.Id;
-            Timestamp = message.Timestamp;
-            NotifiedNodes = message.NotifiedNodes;
+            base.Deserialize(data);
         }
     }
 }
@@ -148,6 +149,17 @@ This epidemic spreading ensures the message reaches all nodes in the network eff
 - Automatic handling of duplicate messages
 - Custom message types through generic implementation
 - Simple subscription model for message handling
+
+## Service Discovery
+
+| Method      | Description                     | Status  |
+|-------------|---------------------------------|---------|
+| DNS         | Discover nodes using DNS        | Done    |
+| Consul      | Discover nodes using Consul     | Planned |
+| Kubernetes  | Discover nodes using Kubernetes | Planned |
+| Docker      | Discover nodes using Docker     | Planned |
+| Static List | Manually configure node list    | Done    |
+
 
 ## License
 
