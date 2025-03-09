@@ -11,6 +11,7 @@ public class GossNetNodeTests
     private GossNetConfiguration _configuration = null!;
     private MockUdpClient _mockUdpClient = null!;
     private GossNetNode<TestMessage> _node = null!;
+    private MockLogger<GossNetNode<TestMessage>> _mockLogger = null!;
 
     [TestInitialize]
     public void Setup()
@@ -22,7 +23,8 @@ public class GossNetNodeTests
         };
         
         _mockUdpClient = new MockUdpClient();
-        _node = new GossNetNode<TestMessage>(_configuration, _mockUdpClient);
+        _mockLogger = new MockLogger<GossNetNode<TestMessage>>();
+        _node = new GossNetNode<TestMessage>(_configuration, udpClient: _mockUdpClient);
     }
 
     [TestCleanup]
@@ -181,14 +183,14 @@ public class TestMessage : GossNetMessageBase
         return $"{{\"Data\":\"{Data}\",\"NotifiedNodes\":[]}}";
     }
 
-    public override void Deserialize(string json)
+    public override void Deserialize(string data)
     {
         // Simple deserialization for testing purposes
-        if (json.Contains("Data"))
+        if (data.Contains("Data"))
         {
-            var dataStart = json.IndexOf("Data") + 7;
-            var dataEnd = json.IndexOf("\"", dataStart);
-            Data = json.Substring(dataStart, dataEnd - dataStart);
+            var dataStart = data.IndexOf("Data") + 7;
+            var dataEnd = data.IndexOf("\"", dataStart);
+            Data = data.Substring(dataStart, dataEnd - dataStart);
             
             // Don't try to call DeserializeNotifiedNodes
             // Just clear the collection instead
