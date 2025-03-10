@@ -14,8 +14,8 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     private readonly ExpiringMessageCache<T> _processedMessages;
     
     // Replace EventHandler with Channel
-    private readonly Channel<GossNetMessageReceivedEventArgs<T>> _messageChannel;
-    private readonly List<ChannelReader<GossNetMessageReceivedEventArgs<T>>> _subscribers = new();
+    private readonly Channel<GossNetChannelMessage<T>> _messageChannel;
+    private readonly List<ChannelReader<GossNetChannelMessage<T>>> _subscribers = new();
     
     private readonly SemaphoreSlim _channelSubscribersSemaphoreSlim = new(1, 1);
     private readonly SemaphoreSlim _udpClientReceiveSemaphoreSlim = new(1, 1);
@@ -31,13 +31,13 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
         _processedMessages = new ExpiringMessageCache<T>(
             TimeSpan.FromSeconds(configuration.MessageTtlSeconds));
         
-        _messageChannel = Channel.CreateUnbounded<GossNetMessageReceivedEventArgs<T>>(
+        _messageChannel = Channel.CreateUnbounded<GossNetChannelMessage<T>>(
             new UnboundedChannelOptions { SingleReader = false, SingleWriter = true });
 
         _logger.LogDebug("GossNetNode initialized on {Hostname}:{Port}", configuration.Hostname, configuration.Port);
     }
 
-    public async Task<ChannelReader<GossNetMessageReceivedEventArgs<T>>> SubscribeAsync()
+    public async Task<ChannelReader<GossNetChannelMessage<T>>> SubscribeAsync()
     {
         await _channelSubscribersSemaphoreSlim.WaitAsync();
         
@@ -54,7 +54,7 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
         }
     }
 
-    public async Task UnsubscribeAsync(ChannelReader<GossNetMessageReceivedEventArgs<T>> reader)
+    public async Task UnsubscribeAsync(ChannelReader<GossNetChannelMessage<T>> reader)
     {
         await _channelSubscribersSemaphoreSlim.WaitAsync();
         
@@ -194,7 +194,7 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
         MarkSelfAsNotified(message);
 
         // Write to channel instead of invoking event
-        var args = new GossNetMessageReceivedEventArgs<T> { Message = message };
+        var args = new GossNetChannelMessage<T> { Message = message };
         await WriteToChannelAsync(args);
 
         var result = await SocializeMessageAsync(message);
@@ -204,7 +204,7 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
         return result;
     }
 
-    private async Task WriteToChannelAsync(GossNetMessageReceivedEventArgs<T> args)
+    private async Task WriteToChannelAsync(GossNetChannelMessage<T> args)
     {
         try
         {

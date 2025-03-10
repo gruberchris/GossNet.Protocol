@@ -7,13 +7,13 @@ public interface IGossNetNode<T> : IDisposable where T : GossNetMessageBase, new
     /// <summary>
     /// Subscribes to incoming GossNet messages.
     /// </summary>
-    Task<ChannelReader<GossNetMessageReceivedEventArgs<T>>> SubscribeAsync();
+    Task<ChannelReader<GossNetChannelMessage<T>>> SubscribeAsync();
     
     /// <summary>
     /// Unsubscribes from incoming GossNet messages.
     /// </summary>
     /// <param name="reader">The channel reader.</param>
-    Task UnsubscribeAsync(ChannelReader<GossNetMessageReceivedEventArgs<T>> reader);
+    Task UnsubscribeAsync(ChannelReader<GossNetChannelMessage<T>> reader);
     
     /// <summary>
     /// Sends a message to other nodes in the network.
