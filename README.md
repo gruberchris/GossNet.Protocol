@@ -148,9 +148,6 @@ _ = Task.Run(async () =>
     }
 });
 
-// Give some time for nodes to start up and listen for messages
-await Task.Delay(1000);
-
 // Send a message from node 1
 var message = new ChatMessage
 {
