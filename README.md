@@ -69,7 +69,6 @@ using GossNet;
 using GossNet.Protocol;
 using Microsoft.Extensions.Logging;
 using Serilog;
-using Serilog.Events;
 
 // Create logger
 var serilogLogger = new LoggerConfiguration()
@@ -81,30 +80,39 @@ var serilogLogger = new LoggerConfiguration()
 var loggerFactory = new LoggerFactory().AddSerilog(serilogLogger);
 
 // Create typed logger for GossNetNode<TestMessage>
-var logger = loggerFactory.CreateLogger<GossNetNode<TestMessage>>();
+var logger = loggerFactory.CreateLogger<GossNetNode<ChatMessage>>();
 
 // Create and start nodes
-var node1 = new GossNetNode<TestMessage>(new GossNetConfiguration
+var node1 = new GossNetNode<ChatMessage>(new GossNetConfiguration
 {
     Hostname = "localhost",
     NodeDiscovery = NodeDiscovery.StaticList,
-    StaticNodes = new List<GossNetNodeHostEntry> { new() { Hostname = "localhost", Port = 9056 } }
+    StaticNodes = new List<GossNetNodeHostEntry> 
+    { 
+        new() { Hostname = "localhost", Port = 9056 }
+    }
 }, logger);
 
-var node2 = new GossNetNode<TestMessage>(new GossNetConfiguration
+var node2 = new GossNetNode<ChatMessage>(new GossNetConfiguration
 {
     Hostname = "localhost",
     Port = 9056,
     NodeDiscovery = NodeDiscovery.StaticList,
-    StaticNodes = new List<GossNetNodeHostEntry> { new() { Hostname = "localhost", Port = 9057 } }
+    StaticNodes = new List<GossNetNodeHostEntry> 
+    { 
+        new() { Hostname = "localhost", Port = 9057 } 
+    }
 }, logger);
 
-var node3 = new GossNetNode<TestMessage>(new GossNetConfiguration
+var node3 = new GossNetNode<ChatMessage>(new GossNetConfiguration
 {
     Hostname = "localhost",
     Port = 9057,
     NodeDiscovery = NodeDiscovery.StaticList,
-    StaticNodes = new List<GossNetNodeHostEntry> { new() { Hostname = "localhost", Port = 9055 } }
+    StaticNodes = new List<GossNetNodeHostEntry> 
+    { 
+        new() { Hostname = "localhost", Port = 9055 }
+    }
 }, logger);
 
 // Start all nodes first
@@ -118,7 +126,7 @@ _ = Task.Run(async () =>
     var reader1 = await node1.SubscribeAsync();
     await foreach (var messageItem in reader1.ReadAllAsync())
     {
-        Console.WriteLine($"[{messageItem.Message.Timestamp} on Node 1] {messageItem.Message.Content}");
+        Console.WriteLine($"[{messageItem.Message.Timestamp} on Node 1] {messageItem.Message.Username} : {messageItem.Message.Content}");
     }
 });
 
@@ -127,7 +135,7 @@ _ = Task.Run(async () =>
     var reader2 = await node2.SubscribeAsync();
     await foreach (var messageItem in reader2.ReadAllAsync())
     {
-        Console.WriteLine($"[{messageItem.Message.Timestamp} on Node 2] {messageItem.Message.Content}");
+        Console.WriteLine($"[{messageItem.Message.Timestamp} on Node 2] {messageItem.Message.Username} : {messageItem.Message.Content}");
     }
 });
 
@@ -136,16 +144,14 @@ _ = Task.Run(async () =>
     var reader3 = await node3.SubscribeAsync();
     await foreach (var messageItem in reader3.ReadAllAsync())
     {
-        Console.WriteLine($"[{messageItem.Message.Timestamp} on Node 3] {messageItem.Message.Content}");
+        Console.WriteLine($"[{messageItem.Message.Timestamp} on Node 3] {messageItem.Message.Username} : {messageItem.Message.Content}");
     }
 });
 
-// Give some time for nodes to start up and listen for messages
-await Task.Delay(1000);
-
 // Send a message from node 1
-var message = new TestMessage
+var message = new ChatMessage
 {
+    Username = "Alice",
     Content = "Hello, world!"
 };
 
@@ -159,11 +165,11 @@ Console.ReadKey();
 When you run this code, you should see the message "Hello, world!" propagated from node 1 to nodes 2 and 3, with each node printing the message to the console.
 
 ```text
-[16:31:09 INF] Starting GossNetNode: localhost:9055
-[16:31:09 INF] Starting GossNetNode: localhost:9056
-[16:31:09 INF] Starting GossNetNode: localhost:9057
-[3/9/2025 8:31:10 PM on Node 2] Hello, world!
-[3/9/2025 8:31:10 PM on Node 3] Hello, world!
+[20:40:15 INF] Starting GossNetNode: localhost:9055
+[20:40:15 INF] Starting GossNetNode: localhost:9056
+[20:40:15 INF] Starting GossNetNode: localhost:9057
+[3/10/2025 12:40:16 AM on Node 2] Alice : Hello, world!
+[3/10/2025 12:40:16 AM on Node 3] Alice : Hello, world!
 Press any key to exit...
 ```
 

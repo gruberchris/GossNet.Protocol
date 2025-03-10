@@ -50,7 +50,7 @@ public class GossNetNodeTests
         // Set up background task to read from channel
         var cts = new CancellationTokenSource();
 
-        GossNetMessageReceivedEventArgs<TestMessage>? result = null;
+        GossNetChannelMessage<TestMessage>? result = null;
         
         var readTask = Task.Run(async () =>
         {
