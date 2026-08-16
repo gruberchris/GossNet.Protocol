@@ -2,63 +2,68 @@ using System.Text.Json;
 
 namespace GossNet.Protocol;
 
+/// <summary>
+/// Base class for messages exchanged over a GossNet network.
+/// </summary>
 public class GossNetMessageBase
 {
-    private Guid _id = Guid.NewGuid();
-    private DateTime _timestamp = DateTime.UtcNow;
-    private List<GossNetNodeHostEntry> _notifiedNodes = [];
+    /// <summary>
+    /// Largest payload that fits in a single IPv4 UDP datagram: 65535 bytes minus the
+    /// 20-byte IP header and 8-byte UDP header.
+    /// </summary>
+    public const int MaxDatagramBytes = 65507;
 
-    public Guid Id 
-    { 
-        get => _id; 
-        internal set => _id = value; 
-    }
-    
-    public DateTime Timestamp 
-    { 
-        get => _timestamp; 
-        internal set => _timestamp = value; 
-    }
-    
-    public IReadOnlyCollection<GossNetNodeHostEntry> NotifiedNodes 
-    { 
-        get => _notifiedNodes; 
-        internal set => _notifiedNodes = value as List<GossNetNodeHostEntry> ?? value.ToList(); 
-    }
+    /// <summary>Gets the unique id used to de-duplicate this message across the network.</summary>
+    public Guid Id { get; internal set; } = Guid.NewGuid();
 
-    public virtual string Serialize()
+    /// <summary>Gets the UTC time the message was created.</summary>
+    public DateTime Timestamp { get; internal set; } = DateTime.UtcNow;
+
+    /// <summary>Gets the nodes already known to have seen this message.</summary>
+    public IReadOnlyCollection<GossNetNodeHostEntry> NotifiedNodes
     {
-        return JsonSerializer.Serialize(this, GetType(), SerializeOptions);
-    }
+        get;
 
+        // Normalizes to a List so callers cannot mutate the message through a
+        // reference they kept, while avoiding a copy when one is not needed.
+        internal set => field = value as List<GossNetNodeHostEntry> ?? [.. value];
+    } = new List<GossNetNodeHostEntry>();
+
+    /// <summary>
+    /// Serializes the message for transmission.
+    /// </summary>
+    public virtual string Serialize() => JsonSerializer.Serialize(this, GetType(), SerializeOptions);
+
+    /// <summary>
+    /// Restores the base properties from a serialized message.
+    /// </summary>
+    /// <param name="data">The serialized message.</param>
+    /// <exception cref="JsonException">The payload could not be read.</exception>
     public virtual void Deserialize(string data)
     {
-        var deserializedMsg = JsonSerializer.Deserialize<BaseProperties>(data, DeserializeOptions);
-    
-        if (deserializedMsg == null) 
-            throw new JsonException("Failed to deserialize TestMessage");
-        
-        Id = deserializedMsg.Id;
-        Timestamp = deserializedMsg.Timestamp;
-        NotifiedNodes = deserializedMsg.NotifiedNodes;
+        var deserialized = JsonSerializer.Deserialize<BaseProperties>(data, DeserializeOptions)
+            ?? throw new JsonException($"Failed to deserialize {GetType().Name}: the payload was null.");
+
+        Id = deserialized.Id;
+        Timestamp = deserialized.Timestamp;
+        NotifiedNodes = deserialized.NotifiedNodes;
     }
-    
-    public override string ToString()
-    {
-        var notifiedNodes = string.Join(", ", NotifiedNodes);
-        return $"Id: {Id}, Timestamp: {Timestamp}, NotifiedNodes: { notifiedNodes }";
-    }
-    
+
+    /// <inheritdoc />
+    public override string ToString() => $"Id: {Id}, Timestamp: {Timestamp}, NotifiedNodes: {string.Join(", ", NotifiedNodes)}";
+
+    // WriteIndented was true, which padded every datagram with whitespace purely to
+    // make the wire format pretty. Indentation roughly doubled small payloads.
     private static readonly JsonSerializerOptions SerializeOptions = new()
     {
-        WriteIndented = true
+        WriteIndented = false
     };
-    
+
     private static readonly JsonSerializerOptions DeserializeOptions = new()
     {
         PropertyNameCaseInsensitive = true
     };
-    
+
     private sealed class BaseProperties
     {
         public Guid Id { get; set; }

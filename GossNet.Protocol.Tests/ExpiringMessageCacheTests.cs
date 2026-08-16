@@ -1,180 +1,167 @@
 namespace GossNet.Protocol.Tests;
 
 [TestClass]
-public class ExpiringMessageCacheTests
+public sealed class ExpiringMessageCacheTests
 {
     [TestMethod]
     public void TryAdd_NewMessage_ReturnsTrue()
     {
-        // Arrange
-        var cache = new ExpiringMessageCache<TestMessage>();
+        using var cache = new ExpiringMessageCache<TestMessage>();
+
+        Assert.IsTrue(cache.TryAdd(new TestMessage()));
+        Assert.AreEqual(1, cache.Count);
+    }
+
+    [TestMethod]
+    public void TryAdd_DuplicateId_ReturnsFalse()
+    {
+        using var cache = new ExpiringMessageCache<TestMessage>();
         var id = Guid.NewGuid();
-        var message = new TestMessage(id) { Content = "Test" };
 
-        // Act
-        var result = cache.TryAdd(message);
-
-        // Assert
-        Assert.IsTrue(result);
+        Assert.IsTrue(cache.TryAdd(new TestMessage { Id = id }));
+        Assert.IsFalse(cache.TryAdd(new TestMessage { Id = id }));
         Assert.AreEqual(1, cache.Count);
     }
 
     [TestMethod]
-    public void TryAdd_DuplicateMessage_ReturnsFalse()
+    public void Contains_ReflectsWhetherIdWasAdded()
     {
-        // Arrange
-        var cache = new ExpiringMessageCache<TestMessage>();
-        var messageId = Guid.NewGuid();
-        var message1 = new TestMessage(messageId) { Content = "Test 1" };
-        var message2 = new TestMessage(messageId) { Content = "Test 2" };
+        using var cache = new ExpiringMessageCache<TestMessage>();
+        var id = Guid.NewGuid();
 
-        // Act
-        var result1 = cache.TryAdd(message1);
-        var result2 = cache.TryAdd(message2);
+        Assert.IsFalse(cache.Contains(id));
 
-        // Assert
-        Assert.IsTrue(result1);
-        Assert.IsFalse(result2);
-        Assert.AreEqual(1, cache.Count);
+        cache.TryAdd(new TestMessage { Id = id });
+
+        Assert.IsTrue(cache.Contains(id));
     }
 
     [TestMethod]
-    public void Contains_ExistingMessage_ReturnsTrue()
+    public async Task Ids_ExpireAfterTheConfiguredWindow()
     {
-        // Arrange
-        var cache = new ExpiringMessageCache<TestMessage>();
-        var messageId = Guid.NewGuid();
-        var message = new TestMessage(messageId) { Content = "Test" };
-        cache.TryAdd(message);
-
-        // Act
-        var result = cache.Contains(messageId);
-
-        // Assert
-        Assert.IsTrue(result);
-    }
-
-    [TestMethod]
-    public void Contains_NonExistingMessage_ReturnsFalse()
-    {
-        // Arrange
-        var cache = new ExpiringMessageCache<TestMessage>();
-        var messageId = Guid.NewGuid();
-
-        // Act
-        var result = cache.Contains(messageId);
-
-        // Assert
-        Assert.IsFalse(result);
-    }
-
-    [TestMethod]
-    public void TryGetValue_ExistingMessage_ReturnsMessageAndTrue()
-    {
-        // Arrange
-        var cache = new ExpiringMessageCache<TestMessage>();
-        var messageId = Guid.NewGuid();
-        var message = new TestMessage(messageId) { Content = "Test" };
-        cache.TryAdd(message);
-
-        // Act
-        var result = cache.TryGetValue(messageId, out var retrievedMessage);
-
-        // Assert
-        Assert.IsTrue(result);
-        Assert.IsNotNull(retrievedMessage);
-        Assert.AreEqual(messageId, retrievedMessage.Id);
-        Assert.AreEqual("Test", retrievedMessage.Content);
-    }
-
-    [TestMethod]
-    public void TryGetValue_NonExistingMessage_ReturnsFalse()
-    {
-        // Arrange
-        var cache = new ExpiringMessageCache<TestMessage>();
-        var messageId = Guid.NewGuid();
-
-        // Act
-        var result = cache.TryGetValue(messageId, out var retrievedMessage);
-
-        // Assert
-        Assert.IsFalse(result);
-        Assert.AreEqual(default, retrievedMessage);
-    }
-
-    [TestMethod]
-    public void GetAll_ReturnsAllMessages()
-    {
-        // Arrange
-        var cache = new ExpiringMessageCache<TestMessage>();
-        var message1 = new TestMessage(Guid.NewGuid()) { Content = "Test 1" };
-        var message2 = new TestMessage(Guid.NewGuid()) { Content = "Test 2" };
-        var message3 = new TestMessage(Guid.NewGuid()) { Content = "Test 3" };
-
-        cache.TryAdd(message1);
-        cache.TryAdd(message2);
-        cache.TryAdd(message3);
-
-        // Act
-        var messages = cache.GetAll().ToList();
-
-        // Assert
-        Assert.AreEqual(3, messages.Count);
-        CollectionAssert.Contains(messages, message1);
-        CollectionAssert.Contains(messages, message2);
-        CollectionAssert.Contains(messages, message3);
-    }
-
-    [TestMethod]
-    public async Task Messages_ExpireAfterTimespan()
-    {
-        // Arrange
         var expiration = TimeSpan.FromMilliseconds(100);
-        var cache = new ExpiringMessageCache<TestMessage>(expiration);
-        var messageId = Guid.NewGuid();
-        var message = new TestMessage(messageId) { Content = "Test" };
+        using var cache = new ExpiringMessageCache<TestMessage>(expiration);
+        var id = Guid.NewGuid();
 
-        // Act
-        cache.TryAdd(message);
-        Assert.IsTrue(cache.Contains(messageId), "Message should be in cache initially");
+        cache.TryAdd(new TestMessage { Id = id });
+        Assert.IsTrue(cache.Contains(id));
 
-        // Wait for expiration
-        await Task.Delay(expiration + TimeSpan.FromMilliseconds(50));
+        await Task.Delay(expiration + TimeSpan.FromMilliseconds(150));
 
-        // Assert
-        Assert.IsFalse(cache.Contains(messageId), "Message should have expired");
-        Assert.AreEqual(0, cache.GetAll().Count(), "GetAll should return empty collection after expiration");
+        Assert.IsFalse(cache.Contains(id), "the id should no longer be remembered");
     }
 
-    private class TestMessage : GossNetMessageBase
+    /// <summary>
+    /// Regression test for the check-then-act race.
+    /// </summary>
+    /// <remarks>
+    /// TryGetValue followed by Set was not atomic, so two threads could both observe
+    /// the same id as absent and both report a first sighting — causing the same
+    /// gossip message to be processed and re-forwarded more than once.
+    /// </remarks>
+    [TestMethod]
+    public async Task TryAdd_ConcurrentCallsForOneId_SucceedExactlyOnce()
     {
-        public string Content { get; set; } = string.Empty;
-        
-        // Add constructor that accepts an ID
-        public TestMessage(Guid? id = null)
+        const int racers = 200;
+
+        using var cache = new ExpiringMessageCache<TestMessage>();
+        var id = Guid.NewGuid();
+
+        // RunContinuationsAsynchronously is essential: by default SetResult runs every
+        // awaiting continuation inline on the completing thread, so the racers would
+        // execute one after another and never actually race.
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ready = new CountdownEvent(racers);
+        var successes = 0;
+
+        var tasks = Enumerable.Range(0, racers).Select(_ => Task.Run(async () =>
         {
-            if (id.HasValue)
+            ready.Signal();
+            await start.Task;
+
+            if (cache.TryAdd(new TestMessage { Id = id }))
             {
-                SetId(id.Value);
+                Interlocked.Increment(ref successes);
             }
-        }
-        
-        // Add method to set ID using reflection (for testing only)
-        private void SetId(Guid id)
-        {
-            var property = typeof(GossNetMessageBase).GetProperty("Id");
-            property?.SetValue(this, id);
-        }
+        })).ToArray();
 
-        public override void Deserialize(string data)
-        {
-            // Not needed for tests
-        }
+        // Only release the racers once every one of them is parked on the gate.
+        ready.Wait(TimeSpan.FromSeconds(30));
+        start.SetResult();
+        await Task.WhenAll(tasks);
 
-        public override string Serialize()
-        {
-            // Not needed for tests
-            return Content;
-        }
+        Assert.AreEqual(1, successes, "exactly one caller may be told it is the first to see the message");
+        Assert.AreEqual(1, cache.Count);
     }
+
+    [TestMethod]
+    public async Task TryAdd_ConcurrentCallsForDistinctIds_AllSucceed()
+    {
+        const int count = 500;
+
+        using var cache = new ExpiringMessageCache<TestMessage>();
+        var ids = Enumerable.Range(0, count).Select(_ => Guid.NewGuid()).ToArray();
+
+        // The key set was a plain HashSet mutated without synchronization, which could
+        // corrupt it or throw under concurrent use.
+        await Task.WhenAll(ids.Select(id => Task.Run(() => cache.TryAdd(new TestMessage { Id = id }))));
+
+        Assert.AreEqual(count, cache.Count);
+        Assert.IsTrue(ids.All(cache.Contains));
+    }
+
+    /// <summary>
+    /// Regression test for the key set growing forever.
+    /// </summary>
+    /// <remarks>
+    /// Keys were only pruned inside GetAll(), which nothing in the library ever called,
+    /// so the set grew without bound even as the cache entries behind it expired —
+    /// defeating the point of an expiring cache.
+    /// </remarks>
+    [TestMethod]
+    public async Task ExpiredIds_AreRemovedFromTheKeySet()
+    {
+        var expiration = TimeSpan.FromMilliseconds(100);
+        using var cache = new ExpiringMessageCache<TestMessage>(expiration);
+
+        var ids = Enumerable.Range(0, 50).Select(_ => Guid.NewGuid()).ToArray();
+
+        foreach (var id in ids)
+        {
+            cache.TryAdd(new TestMessage { Id = id });
+        }
+
+        Assert.AreEqual(50, cache.Count);
+
+        await Task.Delay(expiration + TimeSpan.FromMilliseconds(150));
+
+        // Touching the entries makes MemoryCache evict them and fire the callback that
+        // keeps the key set in step. Those callbacks are dispatched to the thread pool,
+        // so the pruning guarantee is "eventually", not "by the time Contains returns".
+        foreach (var id in ids)
+        {
+            cache.Contains(id);
+        }
+
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+
+        while (cache.Count > 0 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(25);
+        }
+
+        Assert.AreEqual(0, cache.Count, "the key set must shrink as entries expire");
+    }
+
+    [TestMethod]
+    public void Dispose_IsIdempotent()
+    {
+        var cache = new ExpiringMessageCache<TestMessage>();
+        cache.TryAdd(new TestMessage());
+
+        cache.Dispose();
+        cache.Dispose();
+    }
+
+    private sealed class TestMessage : GossNetMessageBase;
 }

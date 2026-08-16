@@ -372,6 +372,31 @@ public class GossNetNodeTests
     }
 
     [TestMethod]
+    public async Task SendAsync_OversizedMessage_ThrowsAClearError()
+    {
+        // Bigger than a single IPv4 UDP datagram can carry. Without the guard this
+        // fails at the socket with an opaque error that never mentions the message.
+        var message = new TestMessage { Data = new string('x', GossNetMessageBase.MaxDatagramBytes + 1) };
+
+        var exception = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            async () => await _node.SendAsync(message));
+
+        StringAssert.Contains(exception.Message, "exceeds the maximum UDP");
+        Assert.AreEqual(0, _udpClient.SentPackets.Count, "nothing should be transmitted");
+    }
+
+    [TestMethod]
+    public async Task SendAsync_MessageJustUnderTheLimit_IsSent()
+    {
+        // 2 KB of slack for the JSON envelope around the payload.
+        var message = new TestMessage { Data = new string('x', GossNetMessageBase.MaxDatagramBytes - 2048) };
+
+        var sent = await _node.SendAsync(message);
+
+        Assert.AreEqual(2, sent);
+    }
+
+    [TestMethod]
     public async Task ReceivedMessage_IsForwardedToNeighbours()
     {
         _node.Start();

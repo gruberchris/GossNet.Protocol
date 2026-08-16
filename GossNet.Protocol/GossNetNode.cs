@@ -310,6 +310,18 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     private async Task<int> SocializeMessageAsync(T message, CancellationToken cancellationToken)
     {
         var data = Encoding.UTF8.GetBytes(message.Serialize());
+
+        // Checked here rather than in Serialize so that custom Serialize overrides are
+        // covered too. Without it an oversized payload fails at the socket with an
+        // opaque error that gives no hint the message itself was the problem.
+        if (data.Length > GossNetMessageBase.MaxDatagramBytes)
+        {
+            throw new InvalidOperationException(
+                $"Serialized message id {message.Id} is {data.Length} bytes, which exceeds the maximum UDP " +
+                $"datagram payload of {GossNetMessageBase.MaxDatagramBytes} bytes. Reduce the message size " +
+                "or split it across multiple messages.");
+        }
+
         var neighbours = GossNetDiscovery.GetNeighbours(_configuration).ToArray();
 
         _logger.LogDebug("{Prefix}Found {Count} neighbours", _nodePrefix, neighbours.Length);
@@ -466,6 +478,9 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
 
         _udpClient.Dispose();
         _sendGate.Dispose();
+
+        // MemoryCache owns a timer, so failing to dispose the cache leaked one per node.
+        _processedMessages.Dispose();
     }
 
     private void ThrowIfDisposed()
