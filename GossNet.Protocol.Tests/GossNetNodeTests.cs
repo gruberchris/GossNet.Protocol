@@ -1,7 +1,6 @@
-using System.Net;
-using System.Net.Sockets;
+using System.Diagnostics;
 using System.Text;
-using System.Threading.Channels;
+using System.Text.Json;
 using GossNet.Protocol.Tests.Mocks;
 
 namespace GossNet.Protocol.Tests;
@@ -9,229 +8,416 @@ namespace GossNet.Protocol.Tests;
 [TestClass]
 public class GossNetNodeTests
 {
+    private static readonly GossNetNodeHostEntry NeighbourA = new() { Hostname = "neighbour-a", Port = 9101 };
+    private static readonly GossNetNodeHostEntry NeighbourB = new() { Hostname = "neighbour-b", Port = 9102 };
+
     private GossNetConfiguration _configuration = null!;
-    private MockUdpClient _mockUdpClient = null!;
+    private MockUdpClient _udpClient = null!;
+    private MockLogger<GossNetNode<TestMessage>> _logger = null!;
     private GossNetNode<TestMessage> _node = null!;
-    private MockLogger<GossNetNode<TestMessage>> _mockLogger = null!;
 
     [TestInitialize]
     public void Setup()
     {
-        _configuration = new GossNetConfiguration
-        {
-            Hostname = "localhost",
-            Port = 8080
-        };
+        _configuration = NewConfiguration();
+        _udpClient = new MockUdpClient();
+        _logger = new MockLogger<GossNetNode<TestMessage>>();
 
-        _mockUdpClient = new MockUdpClient();
-        _mockLogger = new MockLogger<GossNetNode<TestMessage>>();
-        _node = new GossNetNode<TestMessage>(_configuration, udpClient: _mockUdpClient);
+        // The logger is actually passed in now; it used to be constructed and dropped.
+        _node = new GossNetNode<TestMessage>(_configuration, _logger, _udpClient);
     }
 
     [TestCleanup]
-    public void Cleanup()
+    public void Cleanup() => _node.Dispose();
+
+    private static GossNetConfiguration NewConfiguration() => new()
     {
-        try
+        Hostname = "self",
+        Port = 9100,
+        // StaticList keeps neighbour resolution deterministic and off the network.
+        NodeDiscovery = NodeDiscovery.StaticList,
+        StaticNodes = [NeighbourA, NeighbourB]
+    };
+
+    private static byte[] Datagram(TestMessage message) => Encoding.UTF8.GetBytes(message.Serialize());
+
+    /// <summary>Waits for a condition, failing fast rather than sleeping a fixed interval.</summary>
+    private static async Task<bool> WaitForAsync(Func<bool> condition, int timeoutMs = 2000)
+    {
+        var sw = Stopwatch.StartNew();
+
+        while (sw.ElapsedMilliseconds < timeoutMs)
         {
-            _node.Dispose();
+            if (condition())
+            {
+                return true;
+            }
+
+            await Task.Delay(10);
         }
-        catch (AggregateException ex) when (ex.InnerException is TaskCanceledException)
+
+        return condition();
+    }
+
+    // ---------------------------------------------------------------------------
+    // Fan-out: every subscriber must receive every message.
+    // ---------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task Subscribe_DeliversEveryMessageToEverySubscriber()
+    {
+        using var first = _node.Subscribe();
+        using var second = _node.Subscribe();
+        using var third = _node.Subscribe();
+
+        _node.Start();
+        _udpClient.EnqueueReceive(Datagram(new TestMessage { Data = "broadcast" }));
+
+        // Previously all subscribers shared one reader, so exactly one of these
+        // would have received the message and the others would hang.
+        foreach (var subscription in new[] { first, second, third })
         {
-            // Ignore TaskCanceledException during cleanup
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var received = await subscription.Reader.ReadAsync(cts.Token);
+
+            Assert.AreEqual("broadcast", received.Message.Data);
         }
     }
 
     [TestMethod]
-    public async Task SubscribeAsync_AddsChannelReader()
+    public async Task Subscribe_EachSubscriberReceivesAllOfManyMessages()
     {
-        // Arrange
-        var reader = await _node.SubscribeAsync();
+        const int messageCount = 25;
 
-        // Set up background task to read from channel
-        var cts = new CancellationTokenSource();
+        using var first = _node.Subscribe();
+        using var second = _node.Subscribe();
 
-        GossNetChannelMessage<TestMessage>? result = null;
-        
-        var readTask = Task.Run(async () =>
-        {
-            try
-            {
-                result = await reader.ReadAsync(cts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected when cancellation occurs
-            }
-        }, cts.Token);
-
-        // Set up a message to receive
-        var message = new TestMessage { Data = "Test Data" };
-        var jsonMessage = message.Serialize();
-        var bytes = Encoding.UTF8.GetBytes(jsonMessage);
-
-        _mockUdpClient.ReceiveQueue.Enqueue(new UdpReceiveResult(
-            bytes,
-            new IPEndPoint(IPAddress.Parse("127.0.0.1"), 8081)
-        ));
-
-        // Start node to process incoming messages
         _node.Start();
 
-        // Allow time for message processing
-        await Task.Delay(100);
+        for (var i = 0; i < messageCount; i++)
+        {
+            _udpClient.EnqueueReceive(Datagram(new TestMessage { Data = $"message-{i}" }));
+        }
 
-        // Assert
-        Assert.IsTrue(result != null, "Channel reader should have received a message");
+        foreach (var subscription in new[] { first, second })
+        {
+            for (var i = 0; i < messageCount; i++)
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                var received = await subscription.Reader.ReadAsync(cts.Token);
 
-        // Cleanup
-        await cts.CancelAsync();
-        await Task.WhenAny(readTask, Task.Delay(500));
-        cts.Dispose();
+                Assert.AreEqual($"message-{i}", received.Message.Data, "messages must arrive in order and none may be lost");
+            }
+        }
     }
 
     [TestMethod]
-    public async Task UnsubscribeAsync_RemovesChannelReader()
+    public async Task DisposingSubscription_StopsDeliveryAndCompletesReader()
     {
-        // Arrange
-        var callCount = 0;
-        var reader = await _node.SubscribeAsync();
+        var subscription = _node.Subscribe();
+        using var survivor = _node.Subscribe();
 
-        // Set up background task to read from channel
-        var cts = new CancellationTokenSource();
-        var readTask = Task.Run(async () =>
-        {
-            try
-            {
-                await foreach (var args in reader.ReadAllAsync().WithCancellation(cts.Token))
-                {
-                    callCount++;
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected when cancellation occurs
-            }
-        }, cts.Token);
+        _node.Start();
+        subscription.Dispose();
 
-        // Act
-        await _node.UnsubscribeAsync(reader);
+        _udpClient.EnqueueReceive(Datagram(new TestMessage { Data = "after-unsubscribe" }));
 
-        // Send a message
-        var message = new TestMessage { Data = "Test Data" };
-        await _node.SendAsync(message);
+        // The survivor still receives, proving the message really was processed.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var received = await survivor.Reader.ReadAsync(cts.Token);
+        Assert.AreEqual("after-unsubscribe", received.Message.Data);
 
-        // Allow time for potential processing
-        await Task.Delay(100, cts.Token);
-        await cts.CancelAsync();
-        await Task.WhenAny(readTask, Task.Delay(500, cts.Token)); // Allow task to complete or timeout
-
-        // Assert
-        Assert.AreEqual(0, callCount, "Channel reader should not receive messages after unsubscribing");
-    
-        // Cleanup
-        cts.Dispose();
+        // The disposed subscription is completed and empty. Unsubscribing used to
+        // remove the reader from a list that dispatch never consulted, so the caller
+        // kept receiving messages.
+        Assert.IsFalse(subscription.Reader.TryRead(out _), "a disposed subscription must not receive messages");
+        Assert.IsTrue(subscription.Reader.Completion.IsCompleted, "a disposed subscription's reader must complete");
     }
-    
+
+    [TestMethod]
+    public async Task NoSubscribers_DoesNotBufferAnyMessages()
+    {
+        _node.Start();
+
+        // Processed with nobody listening. These used to accumulate forever in a
+        // shared unbounded channel, growing until the process ran out of memory.
+        for (var i = 0; i < 50; i++)
+        {
+            _udpClient.EnqueueReceive(Datagram(new TestMessage { Data = $"unheard-{i}" }));
+        }
+
+        Assert.IsTrue(await WaitForAsync(() => _udpClient.SentPackets.Count >= 50 * 2),
+            "all messages should have been processed and forwarded");
+
+        // A subscriber joining afterwards must not inherit a backlog.
+        using var late = _node.Subscribe();
+        Assert.IsFalse(late.Reader.TryRead(out _), "a new subscriber must not receive messages buffered before it existed");
+    }
+
+    [TestMethod]
+    public async Task SlowSubscriber_DropsOldestInsteadOfGrowing()
+    {
+        var configuration = new GossNetConfiguration
+        {
+            Hostname = "self",
+            Port = 9100,
+            NodeDiscovery = NodeDiscovery.StaticList,
+            StaticNodes = [NeighbourA],
+            SubscriberQueueCapacity = 4
+        };
+
+        var udpClient = new MockUdpClient();
+        using var node = new GossNetNode<TestMessage>(configuration, _logger, udpClient);
+        using var subscription = node.Subscribe();
+
+        node.Start();
+
+        for (var i = 0; i < 40; i++)
+        {
+            udpClient.EnqueueReceive(Datagram(new TestMessage { Data = $"flood-{i}" }));
+        }
+
+        Assert.IsTrue(await WaitForAsync(() => udpClient.SentPackets.Count >= 40),
+            "the node must keep processing even though the subscriber never reads");
+
+        var buffered = 0;
+        while (subscription.Reader.TryRead(out _))
+        {
+            buffered++;
+        }
+
+        Assert.IsTrue(buffered <= 4, $"queue must stay within its capacity of 4 but held {buffered}");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Lifecycle.
+    // ---------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task StopAsync_ReturnsPromptly_WhenNoDatagramEverArrives()
+    {
+        _node.Start();
+
+        // Give the loop time to park inside ReceiveAsync.
+        await Task.Delay(100);
+
+        var sw = Stopwatch.StartNew();
+        await _node.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        sw.Stop();
+
+        // ReceiveAsync took no cancellation token before, so the loop stayed parked
+        // until a datagram happened to arrive and StopAsync waited forever.
+        Assert.IsTrue(sw.ElapsedMilliseconds < 2000, $"StopAsync took {sw.ElapsedMilliseconds}ms; it must not wait for a datagram");
+    }
+
+    [TestMethod]
+    public async Task StopAsync_IsIdempotent()
+    {
+        _node.Start();
+
+        await _node.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await _node.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [TestMethod]
+    public async Task StopAsync_OnNodeThatWasNeverStarted_DoesNothing()
+    {
+        await _node.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [TestMethod]
+    public async Task Node_CanBeRestartedAfterStopping()
+    {
+        using var subscription = _node.Subscribe();
+
+        _node.Start();
+        await _node.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Stopping used to complete the shared channel permanently, so any message
+        // processed after a restart threw on write.
+        _node.Start();
+        _udpClient.EnqueueReceive(Datagram(new TestMessage { Data = "after-restart" }));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var received = await subscription.Reader.ReadAsync(cts.Token);
+
+        Assert.AreEqual("after-restart", received.Message.Data);
+    }
+
+    [TestMethod]
+    public void Start_CalledTwice_DoesNotStartASecondLoop()
+    {
+        _node.Start();
+        _node.Start();
+
+        Assert.IsTrue(_logger.LogEntries.Any(entry => entry.Contains("already running")),
+            "the second Start must be ignored rather than orphaning the first loop");
+    }
+
+    [TestMethod]
+    public void Dispose_IsIdempotent()
+    {
+        _node.Dispose();
+        _node.Dispose();
+    }
+
+    [TestMethod]
+    public void Dispose_DisposesTheTransport()
+    {
+        _node.Dispose();
+
+        Assert.IsTrue(_udpClient.IsDisposed);
+    }
+
+    [TestMethod]
+    public async Task DisposeAsync_StopsTheNodeAndCompletesSubscriptions()
+    {
+        var subscription = _node.Subscribe();
+        _node.Start();
+
+        await _node.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.IsTrue(_udpClient.IsDisposed);
+        Assert.IsTrue(subscription.Reader.Completion.IsCompleted, "disposal must complete subscriber readers so consumers can exit");
+    }
+
+    [TestMethod]
+    public void Subscribe_AfterDispose_Throws()
+    {
+        _node.Dispose();
+
+        Assert.ThrowsExactly<ObjectDisposedException>(() => _node.Subscribe());
+    }
+
+    [TestMethod]
+    public async Task SendAsync_AfterDispose_Throws()
+    {
+        _node.Dispose();
+
+        await Assert.ThrowsExactlyAsync<ObjectDisposedException>(
+            async () => await _node.SendAsync(new TestMessage { Data = "x" }));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Error handling.
+    // ---------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task FailingReceive_BacksOffInsteadOfSpinning()
+    {
+        _udpClient.ReceiveFault = () => new InvalidOperationException("socket boom");
+
+        _node.Start();
+        await Task.Delay(500);
+
+        var attempts = _udpClient.ReceiveAttempts;
+
+        // A persistently failing socket used to be retried with no delay at all,
+        // producing a 100%-CPU loop that flooded the log. With backoff starting at
+        // 50ms and doubling, 500ms allows only a handful of attempts.
+        Assert.IsTrue(attempts is > 0 and < 20, $"expected a small number of backed-off retries, saw {attempts}");
+    }
+
+    [TestMethod]
+    public async Task MalformedDatagram_DoesNotStopTheLoop()
+    {
+        using var subscription = _node.Subscribe();
+
+        _node.Start();
+        _udpClient.EnqueueReceive("this is not json"u8.ToArray());
+        _udpClient.EnqueueReceive(Datagram(new TestMessage { Data = "still-working" }));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var received = await subscription.Reader.ReadAsync(cts.Token);
+
+        Assert.AreEqual("still-working", received.Message.Data);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Gossip behaviour.
+    // ---------------------------------------------------------------------------
+
     [TestMethod]
     public async Task SendAsync_MarksSelfAsNotified()
     {
-        // Arrange
-        var message = new TestMessage { Data = "Test Message" };
+        var message = new TestMessage { Data = "hello" };
 
-        // Act
         await _node.SendAsync(message);
 
-        // Assert
-        Assert.IsTrue(message.NotifiedNodes.Any(n =>
-            n.Hostname == _configuration.Hostname &&
-            n.Port == _configuration.Port
-        ), "Message should mark self as notified");
+        Assert.IsTrue(message.NotifiedNodes.Any(n => n.Hostname == _configuration.Hostname && n.Port == _configuration.Port));
     }
 
     [TestMethod]
-    public async Task SendAsync_SendsToNeighbors()
+    public async Task SendAsync_SendsToEveryNeighbour()
     {
-        // Arrange
-        var message = new TestMessage { Data = "Test Message" };
+        var sent = await _node.SendAsync(new TestMessage { Data = "hello" });
 
-        // Setup neighbors (this would normally be done by GossNetDiscovery)
-        // For testing, we need to mock this behavior
+        Assert.AreEqual(2, sent);
 
-        // Act
-        await _node.SendAsync(message);
-
-        // Assert
-        // Verification would depend on how GossNetDiscovery.GetNeighbours is implemented
-        // In a real test, you'd mock that or use dependency injection
-        Assert.IsTrue(_mockUdpClient.SentPackets.Count >= 0);
+        var destinations = _udpClient.SentPackets.Select(p => $"{p.Hostname}:{p.Port}").OrderBy(x => x).ToArray();
+        CollectionAssert.AreEqual(new[] { "neighbour-a:9101", "neighbour-b:9102" }, destinations);
     }
 
     [TestMethod]
-    public async Task StopAsync_CancelsProcessing()
+    public async Task SendAsync_SkipsNeighboursAlreadyNotified()
     {
-        // Arrange
+        var message = new TestMessage { Data = "hello" };
+        message.NotifiedNodes = [NeighbourA];
+
+        var sent = await _node.SendAsync(message);
+
+        Assert.AreEqual(1, sent);
+        Assert.AreEqual(1, _udpClient.SentPackets.Count);
+        Assert.AreEqual("neighbour-b", _udpClient.SentPackets[0].Hostname);
+    }
+
+    [TestMethod]
+    public async Task ReceivedMessage_IsForwardedToNeighbours()
+    {
+        _node.Start();
+        _udpClient.EnqueueReceive(Datagram(new TestMessage { Data = "relay" }));
+
+        Assert.IsTrue(await WaitForAsync(() => _udpClient.SentPackets.Count == 2),
+            "a received message must be forwarded to both neighbours");
+    }
+
+    [TestMethod]
+    public async Task DuplicateMessage_IsProcessedOnlyOnce()
+    {
+        using var subscription = _node.Subscribe();
         _node.Start();
 
-        // Act
-        try
-        {
-            await _node.StopAsync();
-        }
-        catch (TaskCanceledException)
-        {
-            // This is expected when cancelling tasks
-        }
+        var message = new TestMessage { Data = "duplicate" };
+        var datagram = Datagram(message);
 
-        // Assert
-        // Add a message to the queue and verify it's not processed
-        var message = new TestMessage { Data = "Test Data" };
-        var jsonMessage = message.Serialize();
-        var bytes = Encoding.UTF8.GetBytes(jsonMessage);
+        _udpClient.EnqueueReceive(datagram);
+        _udpClient.EnqueueReceive(datagram);
 
-        _mockUdpClient.ReceiveQueue.Enqueue(new UdpReceiveResult(
-            bytes,
-            new IPEndPoint(IPAddress.Parse("127.0.0.1"), 8081)
-        ));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var received = await subscription.Reader.ReadAsync(cts.Token);
+        Assert.AreEqual("duplicate", received.Message.Data);
 
-        await Task.Delay(100);
+        // Allow the second copy to be processed and discarded.
+        await Task.Delay(200);
 
-        Assert.AreEqual(1, _mockUdpClient.ReceiveQueue.Count, "Message should not be processed after stopping");
-    }
-
-    [TestMethod]
-    public void Dispose_DisposesUdpClient()
-    {
-        // Act
-        _node.Dispose();
-
-        // Assert
-        Assert.IsTrue(_mockUdpClient.IsDisposed, "UdpClient should be disposed");
+        Assert.IsFalse(subscription.Reader.TryRead(out _), "the duplicate must not be delivered a second time");
     }
 }
 
-// Test message class for unit testing
+/// <summary>Message type used by the node tests, serialized the way a real consumer would.</summary>
 public class TestMessage : GossNetMessageBase
 {
     public string Data { get; set; } = string.Empty;
 
-    public override string Serialize()
-    {
-        // Simplified serialization without calling SerializeNotifiedNodes
-        return $"{{\"Data\":\"{Data}\",\"NotifiedNodes\":[]}}";
-    }
-
     public override void Deserialize(string data)
     {
-        // Simple deserialization for testing purposes
-        if (data.Contains("Data"))
-        {
-            var dataStart = data.IndexOf("Data") + 7;
-            var dataEnd = data.IndexOf("\"", dataStart);
-            Data = data.Substring(dataStart, dataEnd - dataStart);
+        base.Deserialize(data);
 
-            // Don't try to call DeserializeNotifiedNodes
-            // Just clear the collection instead
-            NotifiedNodes.ToList().Clear();
+        var parsed = JsonSerializer.Deserialize<TestMessage>(data);
+
+        if (parsed is not null)
+        {
+            Data = parsed.Data;
         }
     }
 }

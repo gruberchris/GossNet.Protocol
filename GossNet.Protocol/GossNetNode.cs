@@ -1,195 +1,256 @@
 using System.Text;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace GossNet.Protocol;
 
+/// <summary>
+/// A gossip protocol node that exchanges messages with its neighbours over UDP.
+/// </summary>
+/// <typeparam name="T">The gossip message type.</typeparam>
 public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new()
 {
+    private static readonly TimeSpan MinReceiveRetryDelay = TimeSpan.FromMilliseconds(50);
+    private static readonly TimeSpan MaxReceiveRetryDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan DisposeStopTimeout = TimeSpan.FromSeconds(5);
+
     private readonly GossNetConfiguration _configuration;
     private readonly IUdpClient _udpClient;
     private readonly ILogger<GossNetNode<T>> _logger;
-    private CancellationTokenSource? _cancellationTokenSource;
-    private Task? _processingTask;
     private readonly ExpiringMessageCache<T> _processedMessages;
     private readonly string _nodePrefix;
-    private readonly Channel<GossNetChannelMessage<T>> _messageChannel;
-    private readonly List<ChannelReader<GossNetChannelMessage<T>>> _subscribers = new();
 
-    private readonly SemaphoreSlim _channelSubscribersSemaphoreSlim = new(1, 1);
-    private readonly SemaphoreSlim _udpClientReceiveSemaphoreSlim = new(1, 1);
-    private readonly SemaphoreSlim _udpClientSendSemaphoreSlim = new(1, 1);
+    /// <summary>Serializes sends, which originate from both callers and the receive loop.</summary>
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
 
+    /// <summary>Guards <see cref="_subscribers"/> and the start/stop/dispose lifecycle.</summary>
+    private readonly object _syncRoot = new();
+
+    /// <summary>
+    /// Copy-on-write snapshot so the receive loop can fan out without taking a lock.
+    /// Only ever replaced under <see cref="_syncRoot"/>, never mutated in place.
+    /// </summary>
+    private Subscription[] _subscribers = [];
+
+    private CancellationTokenSource? _cancellationTokenSource;
+    private Task? _processingTask;
+    private bool _disposed;
+
+    /// <summary>
+    /// Initializes a new node.
+    /// </summary>
+    /// <param name="configuration">Node settings.</param>
+    /// <param name="logger">Optional logger.</param>
+    /// <param name="udpClient">Optional transport; a real UDP socket is created when omitted.</param>
     public GossNetNode(GossNetConfiguration configuration, ILogger<GossNetNode<T>>? logger = null, IUdpClient? udpClient = null)
     {
         _configuration = configuration;
         _udpClient = udpClient ?? new UdpClientAdapter(configuration.Port);
         _udpClient.EnableBroadcast = true;
-        _logger = logger ?? NullLoggerFactory.Instance.CreateLogger<GossNetNode<T>>();
-        _nodePrefix = $"[{_configuration.Hostname}:{_configuration.Port}] ";
+        _logger = logger ?? NullLogger<GossNetNode<T>>.Instance;
+        _nodePrefix = $"[{configuration.Hostname}:{configuration.Port}] ";
 
-        _processedMessages = new ExpiringMessageCache<T>(
-            TimeSpan.FromSeconds(configuration.MessageTtlSeconds));
-
-        _messageChannel = Channel.CreateUnbounded<GossNetChannelMessage<T>>(
-            new UnboundedChannelOptions { SingleReader = false, SingleWriter = true });
+        _processedMessages = new ExpiringMessageCache<T>(TimeSpan.FromSeconds(configuration.MessageTtlSeconds));
 
         _logger.LogDebug("{Prefix}GossNetNode initialized", _nodePrefix);
     }
 
-    public async Task<ChannelReader<GossNetChannelMessage<T>>> SubscribeAsync()
+    /// <inheritdoc />
+    public IGossNetSubscription<T> Subscribe()
     {
-        await _channelSubscribersSemaphoreSlim.WaitAsync();
+        lock (_syncRoot)
+        {
+            ThrowIfDisposed();
 
-        try
-        {
-            var reader = _messageChannel.Reader;
-            _subscribers.Add(reader);
-            _logger.LogDebug("{Prefix}Channel subscriber added", _nodePrefix);
-            return reader;
-        }
-        finally
-        {
-            _channelSubscribersSemaphoreSlim.Release();
+            var subscription = new Subscription(this, _configuration.SubscriberQueueCapacity);
+            _subscribers = [.. _subscribers, subscription];
+
+            _logger.LogDebug("{Prefix}Subscriber added ({Count} total)", _nodePrefix, _subscribers.Length);
+
+            return subscription;
         }
     }
 
-    public async Task UnsubscribeAsync(ChannelReader<GossNetChannelMessage<T>> reader)
+    private void Unsubscribe(Subscription subscription)
     {
-        await _channelSubscribersSemaphoreSlim.WaitAsync();
-
-        try
+        lock (_syncRoot)
         {
-            if (_subscribers.Remove(reader))
+            var remaining = new List<Subscription>(_subscribers.Length);
+
+            foreach (var existing in _subscribers)
             {
-                _logger.LogDebug("{Prefix}Channel subscriber removed", _nodePrefix);
+                if (!ReferenceEquals(existing, subscription))
+                {
+                    remaining.Add(existing);
+                }
             }
-        }
-        finally
-        {
-            _channelSubscribersSemaphoreSlim.Release();
+
+            if (remaining.Count == _subscribers.Length)
+            {
+                return;
+            }
+
+            _subscribers = [.. remaining];
+            _logger.LogDebug("{Prefix}Subscriber removed ({Count} remaining)", _nodePrefix, _subscribers.Length);
         }
     }
 
-    public async Task<int> SendAsync(T message)
+    /// <inheritdoc />
+    public async Task<int> SendAsync(T message, CancellationToken cancellationToken = default)
     {
-        _logger.LogDebug("{Prefix}Sending message: {Data}", _nodePrefix, message.Serialize());
+        ThrowIfDisposed();
+
+        _logger.LogDebug("{Prefix}Sending message id: {Id}", _nodePrefix, message.Id);
 
         MarkSelfAsNotified(message);
         _processedMessages.TryAdd(message);
 
-        var result = await SocializeMessageAsync(message);
-        _logger.LogDebug("{Prefix}Message sent to {Count} neighbors: {Neighbors}", _nodePrefix, result, string.Join(", ", message.NotifiedNodes));
+        var sent = await SocializeMessageAsync(message, cancellationToken).ConfigureAwait(false);
 
-        return result;
+        _logger.LogDebug("{Prefix}Message id: {Id} sent to {Count} neighbours", _nodePrefix, message.Id, sent);
+
+        return sent;
     }
 
-    private async Task<T> ReceiveAsync()
-    {
-        T resultMessage;
-
-        await _udpClientReceiveSemaphoreSlim.WaitAsync();
-
-        try
-        {
-            var result = await _udpClient.ReceiveAsync();
-            var data = Encoding.UTF8.GetString(result.Buffer);
-            _logger.LogTrace("{Prefix}Received message from {EndPoint}: {Data}", _nodePrefix, result.RemoteEndPoint, data);
-
-            var message = new T();
-            message.Deserialize(data);
-            resultMessage = message;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "{Prefix}Error receiving message: {Message}", _nodePrefix, ex.Message);
-            throw;
-        }
-        finally
-        {
-            _udpClientReceiveSemaphoreSlim.Release();
-        }
-
-        return resultMessage;
-    }
-
+    /// <inheritdoc />
     public void Start()
     {
-        _logger.LogInformation("{Prefix}Starting GossNetNode", _nodePrefix);
-
-        _cancellationTokenSource = new CancellationTokenSource();
-        var token = _cancellationTokenSource.Token;
-
-        _processingTask = Task.Run(async () =>
+        lock (_syncRoot)
         {
-            _logger.LogDebug("{Prefix}Message processing loop started", _nodePrefix);
+            ThrowIfDisposed();
 
-            while (!token.IsCancellationRequested)
+            if (_processingTask is not null)
             {
-                try
-                {
-                    var message = await ReceiveAsync();
-                    await ProcessMessageAsync(message);
-                }
-                catch (OperationCanceledException oce)
-                {
-                    _logger.LogDebug(oce, "{Prefix}Message processing loop was canceled", _nodePrefix);
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "{Prefix}Error in message processing loop: {Message}", _nodePrefix, ex.Message);
-                }
+                _logger.LogDebug("{Prefix}Start ignored; node is already running", _nodePrefix);
+                return;
             }
 
-            _logger.LogDebug("{Prefix}Message processing loop ended", _nodePrefix);
-        }, token);
-    }
+            _logger.LogInformation("{Prefix}Starting GossNetNode", _nodePrefix);
 
-    public async Task StopAsync()
-    {
-        _logger.LogInformation("{Prefix}Stopping GossNetNode", _nodePrefix);
+            _cancellationTokenSource = new CancellationTokenSource();
+            var token = _cancellationTokenSource.Token;
 
-        if (_cancellationTokenSource != null)
-        {
-#if NET8_0_OR_GREATER
-            await _cancellationTokenSource.CancelAsync();
-#else
-            _cancellationTokenSource.Cancel();
-            await Task.Yield();
-#endif
-
-            if (_processingTask != null)
-            {
-                try
-                {
-                    await _processingTask;
-                }
-                catch (OperationCanceledException oce)
-                {
-                    _logger.LogDebug(oce, "{Prefix}Processing task was canceled", _nodePrefix);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "{Prefix}Error waiting for processing task to complete", _nodePrefix);
-                }
-            }
-
-            _cancellationTokenSource.Dispose();
-            _cancellationTokenSource = null;
-            _processingTask = null;
-
-            // Complete the channel when stopping
-            _messageChannel.Writer.Complete();
-
-            _logger.LogDebug("{Prefix}GossNetNode stopped", _nodePrefix);
+            // CancellationToken.None: the token cancels the loop from the inside, it must
+            // not prevent the task being scheduled or the task would never observe it.
+            _processingTask = Task.Run(() => ProcessLoopAsync(token), CancellationToken.None);
         }
     }
 
-    private async Task<int> ProcessMessageAsync(T message)
+    /// <inheritdoc />
+    public async Task StopAsync()
     {
-        _logger.LogDebug("{Prefix}Processing received message: {Data}", _nodePrefix, message.Serialize());
+        CancellationTokenSource? cancellationTokenSource;
+        Task? processingTask;
 
+        lock (_syncRoot)
+        {
+            cancellationTokenSource = _cancellationTokenSource;
+            processingTask = _processingTask;
+            _cancellationTokenSource = null;
+            _processingTask = null;
+        }
+
+        if (cancellationTokenSource is null)
+        {
+            return;
+        }
+
+        _logger.LogInformation("{Prefix}Stopping GossNetNode", _nodePrefix);
+
+#if NET8_0_OR_GREATER
+        await cancellationTokenSource.CancelAsync().ConfigureAwait(false);
+#else
+        cancellationTokenSource.Cancel();
+#endif
+
+        if (processingTask is not null)
+        {
+            try
+            {
+                await processingTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected on shutdown.
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "{Prefix}Error waiting for the processing loop to stop", _nodePrefix);
+            }
+        }
+
+        cancellationTokenSource.Dispose();
+
+        _logger.LogDebug("{Prefix}GossNetNode stopped", _nodePrefix);
+    }
+
+    private async Task ProcessLoopAsync(CancellationToken cancellationToken)
+    {
+        _logger.LogDebug("{Prefix}Message processing loop started", _nodePrefix);
+
+        var consecutiveFailures = 0;
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                var received = await _udpClient.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+
+                var data = Encoding.UTF8.GetString(received.Buffer);
+                _logger.LogTrace("{Prefix}Received {Bytes} bytes from {EndPoint}", _nodePrefix, received.Buffer.Length, received.RemoteEndPoint);
+
+                var message = new T();
+                message.Deserialize(data);
+
+                consecutiveFailures = 0;
+
+                await ProcessMessageAsync(message, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (ObjectDisposedException)
+            {
+                // The socket is gone; retrying would spin forever.
+                _logger.LogDebug("{Prefix}Transport disposed; ending message processing loop", _nodePrefix);
+                break;
+            }
+            catch (Exception ex)
+            {
+                consecutiveFailures++;
+                var delay = GetRetryDelay(consecutiveFailures);
+
+                // Without this delay a persistently failing socket produces a hot loop
+                // that burns a core and floods the log.
+                _logger.LogError(ex, "{Prefix}Error in message processing loop (failure {Count}); retrying in {Delay}ms",
+                    _nodePrefix, consecutiveFailures, delay.TotalMilliseconds);
+
+                try
+                {
+                    await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+            }
+        }
+
+        _logger.LogDebug("{Prefix}Message processing loop ended", _nodePrefix);
+    }
+
+    private static TimeSpan GetRetryDelay(int consecutiveFailures)
+    {
+        var exponent = Math.Min(consecutiveFailures - 1, 10);
+        var milliseconds = MinReceiveRetryDelay.TotalMilliseconds * Math.Pow(2, exponent);
+
+        return TimeSpan.FromMilliseconds(Math.Min(milliseconds, MaxReceiveRetryDelay.TotalMilliseconds));
+    }
+
+    private async Task<int> ProcessMessageAsync(T message, CancellationToken cancellationToken)
+    {
         if (!_processedMessages.TryAdd(message))
         {
             _logger.LogDebug("{Prefix}Ignoring previously processed message id: {Id}", _nodePrefix, message.Id);
@@ -197,117 +258,266 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
         }
 
         MarkSelfAsNotified(message);
-        
-        var args = new GossNetChannelMessage<T> { Message = message };
-        await WriteToChannelAsync(args);
+        PublishToSubscribers(message);
 
-        var result = await SocializeMessageAsync(message);
+        var forwarded = await SocializeMessageAsync(message, cancellationToken).ConfigureAwait(false);
 
-        _logger.LogDebug("{Prefix}Message processed and forwarded to {Count} nodes", _nodePrefix, result);
+        _logger.LogDebug("{Prefix}Message id: {Id} processed and forwarded to {Count} neighbours", _nodePrefix, message.Id, forwarded);
 
-        return result;
+        return forwarded;
     }
 
-    private async Task WriteToChannelAsync(GossNetChannelMessage<T> args)
+    private void PublishToSubscribers(T message)
     {
-        try
+        // Lock-free read of the copy-on-write snapshot.
+        var subscribers = _subscribers;
+
+        // With no subscribers nothing is buffered at all. The previous implementation
+        // wrote every message into a shared unbounded channel whether or not anyone
+        // was reading, which grew without limit for the lifetime of the node.
+        if (subscribers.Length == 0)
         {
-            _logger.LogTrace("{Prefix}Writing message to channel", _nodePrefix);
-            await _messageChannel.Writer.WriteAsync(args);
-            _logger.LogTrace("{Prefix}Message written to channel successfully", _nodePrefix);
+            return;
         }
-        catch (Exception ex)
+
+        var envelope = new GossNetChannelMessage<T> { Message = message };
+
+        foreach (var subscriber in subscribers)
         {
-            _logger.LogError(ex, "{Prefix}Error writing to message channel", _nodePrefix);
-            throw;
+            subscriber.Publish(envelope, _logger, _nodePrefix);
         }
     }
 
     private void MarkSelfAsNotified(T message)
     {
-        if (!message.NotifiedNodes.Any(n => n.Hostname == _configuration.Hostname && n.Port == _configuration.Port))
+        foreach (var notified in message.NotifiedNodes)
         {
-            message.NotifiedNodes = message.NotifiedNodes.Append(new GossNetNodeHostEntry {
-                Hostname = _configuration.Hostname,
-                Port = _configuration.Port
-            }).ToArray();
-
-            _logger.LogTrace("{Prefix}Marked self as notified for message id: {Id}", _nodePrefix, message.Id);
+            if (notified.Hostname == _configuration.Hostname && notified.Port == _configuration.Port)
+            {
+                return;
+            }
         }
+
+        message.NotifiedNodes =
+        [
+            .. message.NotifiedNodes,
+            new GossNetNodeHostEntry { Hostname = _configuration.Hostname, Port = _configuration.Port }
+        ];
+
+        _logger.LogTrace("{Prefix}Marked self as notified for message id: {Id}", _nodePrefix, message.Id);
     }
 
-    private async Task<int> SocializeMessageAsync(T message)
+    private async Task<int> SocializeMessageAsync(T message, CancellationToken cancellationToken)
     {
         var data = Encoding.UTF8.GetBytes(message.Serialize());
+        var neighbours = GossNetDiscovery.GetNeighbours(_configuration).ToArray();
 
-        var neighbors = GossNetDiscovery.GetNeighbours(_configuration).ToArray();
-        var neighborsString = string.Join(", ", neighbors.Select(n => n.ToString()));
-        _logger.LogDebug("{Prefix}Found {Count} neighbors: {Neighbors}", _nodePrefix, neighbors.Length, neighborsString);
+        _logger.LogDebug("{Prefix}Found {Count} neighbours", _nodePrefix, neighbours.Length);
 
         var sentCount = 0;
 
-        foreach (var neighbour in neighbors)
+        foreach (var neighbour in neighbours)
         {
-            if (message.NotifiedNodes.Any(n => n.Hostname == neighbour.Hostname && n.Port == neighbour.Port))
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (IsAlreadyNotified(message, neighbour))
             {
-                _logger.LogTrace("{Prefix}Skipping already notified neighbor {Host}:{Port} for message id: {Id}", 
-                    _nodePrefix, neighbour.Hostname, neighbour.Port, message.Id);
+                _logger.LogTrace("{Prefix}Skipping already notified neighbour {Neighbour} for message id: {Id}",
+                    _nodePrefix, neighbour, message.Id);
                 continue;
             }
 
-            var hostname = neighbour.Hostname;
-            var port = neighbour.Port;
-
-            await _udpClientSendSemaphoreSlim.WaitAsync();
+            await _sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
             try
             {
-                _logger.LogTrace("{Prefix}Sending message id: {Id} to {Host}:{Port}", _nodePrefix, message.Id, hostname, port);
-                var result = await _udpClient.SendAsync(data, data.Length, hostname, port);
+                var sent = await _udpClient.SendAsync(data, neighbour.Hostname, neighbour.Port, cancellationToken).ConfigureAwait(false);
 
-                if (result > 0)
+                if (sent > 0)
                 {
                     sentCount++;
-                    _logger.LogTrace("{Prefix}Successfully sent message id: {Id} as {Bytes} bytes to {Host}:{Port}", 
-                        _nodePrefix, message.Id, result, hostname, port);
+                    _logger.LogTrace("{Prefix}Sent message id: {Id} as {Bytes} bytes to {Neighbour}",
+                        _nodePrefix, message.Id, sent, neighbour);
                 }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "{Prefix}Error sending message id: {Id} to {Host}:{Port}", _nodePrefix, message.Id, hostname, port);
+                // One unreachable neighbour must not stop the message reaching the others.
+                _logger.LogError(ex, "{Prefix}Error sending message id: {Id} to {Neighbour}", _nodePrefix, message.Id, neighbour);
             }
             finally
             {
-                _udpClientSendSemaphoreSlim.Release();
+                _sendGate.Release();
             }
         }
 
         return sentCount;
     }
 
+    private static bool IsAlreadyNotified(T message, GossNetNodeHostEntry neighbour)
+    {
+        foreach (var notified in message.NotifiedNodes)
+        {
+            if (notified.Hostname == neighbour.Hostname && notified.Port == neighbour.Port)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <inheritdoc />
+    public async ValueTask DisposeAsync()
+    {
+        lock (_syncRoot)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+        }
+
+        await StopAsync().ConfigureAwait(false);
+        ReleaseResources();
+
+        GC.SuppressFinalize(this);
+    }
+
+    /// <inheritdoc />
     public void Dispose()
     {
         Dispose(true);
         GC.SuppressFinalize(this);
     }
 
+    /// <summary>
+    /// Releases resources held by the node.
+    /// </summary>
+    /// <param name="disposing">True when called from <see cref="Dispose()"/>.</param>
+    /// <remarks>
+    /// Prefer <see cref="DisposeAsync"/>: stopping is inherently asynchronous, so the
+    /// synchronous path can only wait a bounded time for the receive loop to unwind.
+    /// </remarks>
     protected virtual void Dispose(bool disposing)
     {
-        if (!disposing) return;
+        if (!disposing)
+        {
+            return;
+        }
+
+        CancellationTokenSource? cancellationTokenSource;
+        Task? processingTask;
+
+        lock (_syncRoot)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+
+            cancellationTokenSource = _cancellationTokenSource;
+            processingTask = _processingTask;
+            _cancellationTokenSource = null;
+            _processingTask = null;
+        }
 
         _logger.LogInformation("{Prefix}Disposing GossNetNode", _nodePrefix);
 
         try
         {
-            _cancellationTokenSource?.Cancel();
-            _processingTask?.Wait(TimeSpan.FromSeconds(5));
-            _udpClient.Dispose();
-            _cancellationTokenSource?.Dispose();
-            _messageChannel.Writer.Complete();
+            cancellationTokenSource?.Cancel();
+            processingTask?.Wait(DisposeStopTimeout);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "{Prefix}Error during GossNetNode disposal", _nodePrefix);
+            _logger.LogError(ex, "{Prefix}Error stopping the processing loop during disposal", _nodePrefix);
+        }
+        finally
+        {
+            cancellationTokenSource?.Dispose();
+            ReleaseResources();
+        }
+    }
+
+    private void ReleaseResources()
+    {
+        Subscription[] subscribers;
+
+        lock (_syncRoot)
+        {
+            subscribers = _subscribers;
+            _subscribers = [];
+        }
+
+        // Completing each reader ends any `await foreach` a consumer is running.
+        foreach (var subscriber in subscribers)
+        {
+            subscriber.Complete();
+        }
+
+        _udpClient.Dispose();
+        _sendGate.Dispose();
+    }
+
+    private void ThrowIfDisposed()
+    {
+        if (_disposed)
+        {
+            throw new ObjectDisposedException(nameof(GossNetNode<T>));
+        }
+    }
+
+    /// <summary>
+    /// A subscriber's private, bounded delivery queue.
+    /// </summary>
+    private sealed class Subscription(GossNetNode<T> node, int capacity) : IGossNetSubscription<T>
+    {
+        private readonly Channel<GossNetChannelMessage<T>> _channel =
+            Channel.CreateBounded<GossNetChannelMessage<T>>(new BoundedChannelOptions(capacity)
+            {
+                // Drop this subscriber's oldest message rather than blocking the shared
+                // receive loop: a slow consumer degrades only itself.
+                FullMode = BoundedChannelFullMode.DropOldest,
+                SingleReader = false,
+                SingleWriter = true
+            });
+
+        private int _disposed;
+
+        public ChannelReader<GossNetChannelMessage<T>> Reader => _channel.Reader;
+
+        internal void Publish(GossNetChannelMessage<T> envelope, ILogger logger, string nodePrefix)
+        {
+            if (_channel.Reader.CanCount && _channel.Reader.Count >= capacity)
+            {
+                logger.LogWarning("{Prefix}Subscriber queue is full ({Capacity}); dropping the oldest message",
+                    nodePrefix, capacity);
+            }
+
+            // Never blocks: DropOldest evicts instead of waiting.
+            _channel.Writer.TryWrite(envelope);
+        }
+
+        internal void Complete() => _channel.Writer.TryComplete();
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            node.Unsubscribe(this);
+            Complete();
         }
     }
 }
