@@ -152,7 +152,12 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
 
         if (_cancellationTokenSource != null)
         {
+#if NET8_0_OR_GREATER
             await _cancellationTokenSource.CancelAsync();
+#else
+            _cancellationTokenSource.Cancel();
+            await Task.Yield();
+#endif
 
             if (_processingTask != null)
             {

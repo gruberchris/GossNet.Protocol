@@ -1,19 +1,38 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFramework>net9.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
+        <!--
+          Consumer-facing contract. netstandard2.0 covers .NET Framework 4.6.2+ and
+          older runtimes; net8.0 is the current LTS; net10.0 gets the newest BCL APIs.
+          Deliberately NOT tied to the SDK version used to build (see global.json).
+        -->
+        <TargetFrameworks>netstandard2.0;net8.0;net10.0</TargetFrameworks>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <!--
+          TODO: drop this NoWarn once the 2.0 public API settles and every member is
+          documented. Enabling it now would bury the real diagnostics under ~40
+          CS1591s for API that is about to be rewritten.
+        -->
+        <NoWarn>$(NoWarn);CS1591</NoWarn>
         <PackageReadmeFile>README.md</PackageReadmeFile>
     </PropertyGroup>
-    
+
     <ItemGroup>
         <None Include="../README.md" Pack="true" PackagePath="\"/>
     </ItemGroup>
-    
+
     <ItemGroup>
-      <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="9.0.2" />
-      <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.2" />
+        <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    </ItemGroup>
+
+    <!-- Polyfills required only where the target runtime lacks the type outright. -->
+    <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+        <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" />
+        <PackageReference Include="Microsoft.Bcl.HashCode" />
+        <PackageReference Include="System.Text.Json" />
+        <PackageReference Include="System.Threading.Channels" />
+        <PackageReference Include="PolySharp" PrivateAssets="all" IncludeAssets="runtime;build;native;contentfiles;analyzers;buildtransitive" />
     </ItemGroup>
 
     <PropertyGroup>

@@ -1,0 +1,37 @@
+<Project>
+
+    <!--
+      Build-time settings shared by every project in the repository.
+
+      Note the deliberate separation of concerns:
+        * global.json pins the SDK used to BUILD this repo (.NET 10, C# 14).
+        * Each project's TargetFramework(s) declare what CONSUMERS need.
+      The two are independent: we compile with the newest toolchain while still
+      shipping assemblies that run on older runtimes.
+    -->
+    <PropertyGroup>
+        <LangVersion>latest</LangVersion>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+        <AnalysisLevel>latest</AnalysisLevel>
+    </PropertyGroup>
+
+    <!-- Reproducible builds. ContinuousIntegrationBuild normalizes paths embedded in the PDB. -->
+    <PropertyGroup>
+        <Deterministic>true</Deterministic>
+        <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    </PropertyGroup>
+
+    <!--
+      Package/symbol defaults. SourceLink requires no PackageReference: the GitHub
+      provider has shipped in the .NET SDK since 8.0.
+    -->
+    <PropertyGroup>
+        <PublishRepositoryUrl>true</PublishRepositoryUrl>
+        <EmbedUntrackedSources>true</EmbedUntrackedSources>
+        <IncludeSymbols>true</IncludeSymbols>
+        <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    </PropertyGroup>
+
+</Project>
