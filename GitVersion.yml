@@ -5,13 +5,16 @@
 #     *strategy*, and `mode` selects the deployment model instead.
 #   * `tag:` was renamed to `label:`.
 #   * `prevent-increment-of-merged-branch-version:` moved under `prevent-increment:`.
+#
+# Deployment mode is set per-branch below rather than globally, because main and
+# feature branches want opposite behaviour. This root value only applies to
+# branches that match nothing else.
 mode: ContinuousDelivery
 
-# The root increment is the fallback used when no branch configuration matches --
-# which is exactly what happens on a CI `push` build, because actions/checkout
-# leaves HEAD detached and GitVersion cannot resolve a branch name. It must be a
-# concrete value: the default `Inherit` has nothing to inherit from in that state
-# and makes the Mainline strategy throw
+# The root increment is the fallback used when no branch configuration matches
+# (an unmatched branch name, or a detached HEAD where no branch can be resolved).
+# It must be a concrete value: the default `Inherit` has nothing to inherit from
+# and makes the Mainline strategy throw outright --
 # "Specified argument was out of the range of valid values. (Parameter 'strategy')".
 increment: Patch
 
@@ -24,6 +27,12 @@ strategies:
 branches:
   main:
     regex: ^master$|^main$
+    # ContinuousDeployment is the GitVersion 6 equivalent of the v5 `mode: Mainline`
+    # this repo used: every commit on main is a releasable version with no
+    # prerelease label. ContinuousDelivery (the v6 default) instead numbers the
+    # commits since the last tag, which is what produced 0.1.19-2 on main and
+    # blocked the release.
+    mode: ContinuousDeployment
     label: ''
     increment: Patch
     prevent-increment:
@@ -39,6 +48,9 @@ branches:
   # unlabelled version indistinguishable from a release build.
   feature:
     regex: ^features?[/-]|^fix[/-]|^chore[/-]|^docs?[/-]|^refactor[/-]|^tests?[/-]|^perf[/-]
+    # Feature branches keep ContinuousDelivery so PR builds stay clearly labelled
+    # prereleases (0.1.19-alpha.1) and can never be mistaken for a release.
+    mode: ContinuousDelivery
     label: alpha
     increment: Patch
     source-branches:
