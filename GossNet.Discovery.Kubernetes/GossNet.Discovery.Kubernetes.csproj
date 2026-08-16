@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <!--
+          net8.0 and net10.0 only. KubernetesClient 19.x ships lib/net8.0, lib/net9.0
+          and lib/net10.0 and NO netstandard2.0 asset, so this provider cannot cover
+          netstandard2.0 the way the core package and the Consul provider do. That
+          constraint is precisely why the discovery providers ship as separate
+          packages: folding this dependency into GossNet.Protocol would force the core
+          package to drop netstandard2.0 for every consumer.
+        -->
+        <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <None Include="README.md" Pack="true" PackagePath="\"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="KubernetesClient"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\GossNet.Protocol\GossNet.Protocol.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="GossNet.Discovery.Tests"/>
+    </ItemGroup>
+
+    <PropertyGroup>
+        <PackageId>GossNet.Discovery.Kubernetes</PackageId>
+        <Authors>Chris Gruber</Authors>
+        <Description>Kubernetes-based node discovery for GossNet.Protocol.</Description>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <PackageProjectUrl>https://github.com/gruberchris/GossNet.Protocol</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/gruberchris/GossNet.Protocol</RepositoryUrl>
+        <PackageTags>gossip;network;protocol;kubernetes;k8s;service-discovery</PackageTags>
+    </PropertyGroup>
+</Project>
