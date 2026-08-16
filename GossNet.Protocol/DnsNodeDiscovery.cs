@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net;
 
 namespace GossNet.Protocol;
@@ -16,23 +15,10 @@ namespace GossNet.Protocol;
 /// message, and used the blocking <c>Dns.GetHostEntry</c> inside an async method.
 /// </para>
 /// </remarks>
-public sealed class DnsNodeDiscovery : INodeDiscovery
+public sealed class DnsNodeDiscovery : CachingNodeDiscovery
 {
-    /// <summary>Default lifetime of a resolved neighbour list.</summary>
-    public static readonly TimeSpan DefaultCacheDuration = TimeSpan.FromSeconds(30);
-
     private readonly GossNetConfiguration _configuration;
     private readonly IDnsResolver _resolver;
-    private readonly TimeSpan _cacheDuration;
-
-#if NET9_0_OR_GREATER
-    private readonly Lock _gate = new();
-#else
-    private readonly object _gate = new();
-#endif
-
-    private IReadOnlyList<GossNetNodeHostEntry> _cached = [];
-    private long _cachedAt = long.MinValue;
 
     /// <summary>
     /// Initializes DNS-based discovery.
@@ -41,20 +27,15 @@ public sealed class DnsNodeDiscovery : INodeDiscovery
     /// <param name="cacheDuration">How long to reuse a resolved list. Defaults to 30 seconds.</param>
     /// <param name="resolver">Resolver to use; the system resolver by default.</param>
     public DnsNodeDiscovery(GossNetConfiguration configuration, TimeSpan? cacheDuration = null, IDnsResolver? resolver = null)
+        : base(cacheDuration)
     {
         _configuration = configuration;
         _resolver = resolver ?? SystemDnsResolver.Instance;
-        _cacheDuration = cacheDuration ?? DefaultCacheDuration;
     }
 
     /// <inheritdoc />
-    public async ValueTask<IReadOnlyList<GossNetNodeHostEntry>> GetNeighboursAsync(CancellationToken cancellationToken = default)
+    protected override async ValueTask<IReadOnlyList<GossNetNodeHostEntry>> ResolveAsync(CancellationToken cancellationToken)
     {
-        if (TryGetFresh(out var cached))
-        {
-            return cached;
-        }
-
         var addresses = await _resolver.GetHostAddressesAsync(_configuration.Hostname, cancellationToken).ConfigureAwait(false);
         var localAddresses = await _resolver.GetLocalAddressesAsync(cancellationToken).ConfigureAwait(false);
 
@@ -73,9 +54,10 @@ public sealed class DnsNodeDiscovery : INodeDiscovery
             var key = Normalize(address);
 
             // Every entry resolved here carries this node's own port, so an address that
-            // belongs to this machine is this node. Without this the node unicasts every
-            // message back to itself: self-exclusion used to compare the configured
-            // *hostname* against resolved *IP addresses*, which never matched.
+            // belongs to this machine is this node. Self-exclusion is address-based
+            // rather than the shared hostname comparison, because DNS hands back IP
+            // addresses: comparing the configured *hostname* against them never matched,
+            // and the node unicast every message back to itself.
             if (local.Contains(key) || !seen.Add(key))
             {
                 continue;
@@ -84,30 +66,7 @@ public sealed class DnsNodeDiscovery : INodeDiscovery
             neighbours.Add(new GossNetNodeHostEntry { Hostname = address.ToString(), Port = _configuration.Port });
         }
 
-        lock (_gate)
-        {
-            _cached = neighbours;
-            _cachedAt = Stopwatch.GetTimestamp();
-        }
-
         return neighbours;
-    }
-
-    private bool TryGetFresh(out IReadOnlyList<GossNetNodeHostEntry> neighbours)
-    {
-        lock (_gate)
-        {
-            neighbours = _cached;
-
-            if (_cachedAt == long.MinValue)
-            {
-                return false;
-            }
-
-            var age = TimeSpan.FromSeconds((double)(Stopwatch.GetTimestamp() - _cachedAt) / Stopwatch.Frequency);
-
-            return age < _cacheDuration;
-        }
     }
 
     private static string Normalize(IPAddress address) =>

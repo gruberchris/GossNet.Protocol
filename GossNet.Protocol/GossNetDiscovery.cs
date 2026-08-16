@@ -24,6 +24,12 @@ internal static class GossNetDiscovery
             return configuration.DiscoveryProvider;
         }
 
+        if (configuration.DiscoveryProviderFactory is not null)
+        {
+            return configuration.DiscoveryProviderFactory(configuration)
+                ?? throw new NodeDiscoveryException($"{nameof(GossNetConfiguration.DiscoveryProviderFactory)} returned null.");
+        }
+
         return configuration.NodeDiscovery switch
         {
             NodeDiscovery.Dns => new DnsNodeDiscovery(configuration),

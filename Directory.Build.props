@@ -17,6 +17,16 @@
         <AnalysisLevel>latest</AnalysisLevel>
     </PropertyGroup>
 
+    <!--
+      netstandard2.0 predates the compiler attributes behind `required`, `init`,
+      records and nullable annotations. PolySharp generates them. Applied here rather
+      than per project so every package that multi-targets netstandard2.0 gets them;
+      the condition means projects that do not target it are unaffected.
+    -->
+    <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+        <PackageReference Include="PolySharp" PrivateAssets="all" IncludeAssets="runtime;build;native;contentfiles;analyzers;buildtransitive" />
+    </ItemGroup>
+
     <!-- Reproducible builds. ContinuousIntegrationBuild normalizes paths embedded in the PDB. -->
     <PropertyGroup>
         <Deterministic>true</Deterministic>

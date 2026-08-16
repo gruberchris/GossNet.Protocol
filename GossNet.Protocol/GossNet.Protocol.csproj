@@ -37,7 +37,8 @@
         <PackageReference Include="Microsoft.Bcl.HashCode" />
         <PackageReference Include="System.Text.Json" />
         <PackageReference Include="System.Threading.Channels" />
-        <PackageReference Include="PolySharp" PrivateAssets="all" IncludeAssets="runtime;build;native;contentfiles;analyzers;buildtransitive" />
+        <!-- PolySharp comes from Directory.Build.props, which applies it to every
+             project that multi-targets netstandard2.0. -->
     </ItemGroup>
 
     <PropertyGroup>
