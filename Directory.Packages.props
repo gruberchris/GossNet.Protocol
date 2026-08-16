@@ -27,6 +27,7 @@
          their dependencies stay out of the core package. -->
     <ItemGroup>
         <PackageVersion Include="Consul" Version="1.8.0" />
+        <PackageVersion Include="Docker.DotNet" Version="3.125.15" />
         <PackageVersion Include="KubernetesClient" Version="19.0.2" />
     </ItemGroup>
 
