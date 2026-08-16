@@ -4,77 +4,62 @@ namespace GossNet.Protocol.Tests;
 public sealed class GossNetConfigurationTests
 {
     [TestMethod]
-    public void Constructor_SetDefaultValues_ReturnsExpectedDefaults()
+    public void Defaults_AreAsDocumented()
     {
-        // Arrange & Act
-        var config = new GossNetConfiguration
-        {
-            Hostname = "localhost"
-        };
-        
-        // Assert
-        Assert.AreEqual("localhost", config.Hostname);
+        var config = new GossNetConfiguration { Hostname = "localhost" };
+
+        // The README claimed 5055 for a long time; 9055 is the real default.
         Assert.AreEqual(9055, config.Port);
+        Assert.AreEqual("localhost", config.Hostname);
+        Assert.AreEqual(NodeDiscovery.Dns, config.NodeDiscovery);
+        Assert.AreEqual(600, config.MessageTtlSeconds);
+        Assert.AreEqual(1024, config.SubscriberQueueCapacity);
         Assert.AreEqual(0, config.StaticNodes.Count());
+        Assert.IsNull(config.DiscoveryProvider);
+        Assert.IsNull(config.DiscoveryProviderFactory);
     }
-    
+
     [TestMethod]
-    public void Constructor_WithCustomValues_ReturnsExpectedValues()
+    public void CustomValues_AreRetained()
     {
-        // Arrange
-        var staticNodes = new List<GossNetNodeHostEntry>
-        {
+        GossNetNodeHostEntry[] staticNodes =
+        [
             new() { Hostname = "node1", Port = 8080 },
             new() { Hostname = "node2", Port = 8081 }
-        };
-        
-        // Act
+        ];
+
         var config = new GossNetConfiguration
         {
             Hostname = "test-server",
             Port = 8080,
             NodeDiscovery = NodeDiscovery.StaticList,
-            StaticNodes = staticNodes
+            StaticNodes = staticNodes,
+            MessageTtlSeconds = 30,
+            SubscriberQueueCapacity = 8
         };
-        
-        // Assert
+
         Assert.AreEqual("test-server", config.Hostname);
         Assert.AreEqual(8080, config.Port);
         Assert.AreEqual(NodeDiscovery.StaticList, config.NodeDiscovery);
-        Assert.AreEqual(2, config.StaticNodes.Count());
-        CollectionAssert.AreEqual(staticNodes.ToList(), config.StaticNodes.ToList());
+        Assert.AreEqual(30, config.MessageTtlSeconds);
+        Assert.AreEqual(8, config.SubscriberQueueCapacity);
+        CollectionAssert.AreEqual(staticNodes, config.StaticNodes.ToArray());
     }
-    
+
+    /// <summary>
+    /// `required` is a compile-time guarantee, so this asserts the contract that
+    /// actually matters: a caller cannot construct the configuration without a
+    /// hostname. The previous version reflected over the attribute and then asserted
+    /// that an empty string round-tripped, which tested nothing.
+    /// </summary>
     [TestMethod]
-    public void Constructor_WithoutRequiredHostname_ThrowsException()
+    public void Hostname_IsRequiredAtCompileTime()
     {
-        // Arrange, Act, Assert
-        // Use a compile-time valid approach to test a required property
-    
-        // Option 1: Verify attribute is present (requires reflection)
-        var property = typeof(GossNetConfiguration).GetProperty("Hostname");
-        Assert.IsNotNull(property);
-        Assert.IsTrue(property.CustomAttributes.Any(attr => 
-            attr.AttributeType.Name == "RequiredMemberAttribute"));
-    
-        // Option 2: Alternative test that validates behavior
-        var config = new GossNetConfiguration { Hostname = "" };
-        Assert.AreEqual("", config.Hostname);
-        // If there's validation logic that checks for empty strings, test that instead
-    }
-    
-    [TestMethod]
-    public void StaticNodes_DefaultIsEmptyList()
-    {
-        // Arrange & Act
-        var config = new GossNetConfiguration
-        {
-            Hostname = "localhost"
-        };
-        
-        // Assert
-        Assert.IsNotNull(config.StaticNodes);
-        Assert.IsInstanceOfType(config.StaticNodes, typeof(IEnumerable<GossNetNodeHostEntry>));
-        Assert.AreEqual(0, config.StaticNodes.Count());
+        var hostname = typeof(GossNetConfiguration).GetProperty(nameof(GossNetConfiguration.Hostname));
+
+        Assert.IsNotNull(hostname);
+        Assert.IsTrue(
+            hostname.CustomAttributes.Any(attribute => attribute.AttributeType.Name == "RequiredMemberAttribute"),
+            "omitting Hostname must be a compile error");
     }
 }
