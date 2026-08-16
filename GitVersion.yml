@@ -1,21 +1,46 @@
-mode: Mainline
+# GitVersion 6 configuration.
+#
+# Migrated from the v5 schema, which v6 rejects outright:
+#   * `mode: Mainline` is no longer a mode -- mainline is now a versioning
+#     *strategy*, and `mode` selects the deployment model instead.
+#   * `tag:` was renamed to `label:`.
+#   * `prevent-increment-of-merged-branch-version:` moved under `prevent-increment:`.
+mode: ContinuousDelivery
+
+strategies:
+  - Mainline
+  - MergeMessage
+  - TaggedCommit
+  - VersionInBranchName
+
 branches:
   main:
     regex: ^master$|^main$
-    tag: ''
+    label: ''
     increment: Patch
-    prevent-increment-of-merged-branch-version: true
+    prevent-increment:
+      of-merged-branch: true
     track-merge-target: false
     tracks-release-branches: false
     is-release-branch: true
+
+  # Widened from the v5 `^features?[/-]` so the conventional-commit branch
+  # prefixes this repo actually uses (feat/, fix/, chore/, docs/, refactor/,
+  # test/, perf/) all resolve to a prerelease version during PR validation.
+  # Without this they fall through to the fallback config and PR builds get an
+  # unlabelled version indistinguishable from a release build.
   feature:
-    regex: ^features?[/-]
-    tag: alpha
+    regex: ^features?[/-]|^fix[/-]|^chore[/-]|^docs?[/-]|^refactor[/-]|^tests?[/-]|^perf[/-]
+    label: alpha
     increment: Patch
-    prevent-increment-of-merged-branch-version: false
+    source-branches:
+      - main
+    prevent-increment:
+      of-merged-branch: false
     track-merge-target: false
     tracks-release-branches: false
     is-release-branch: false
+
 ignore:
   sha: []
 merge-message-formats: {}

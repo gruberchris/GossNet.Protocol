@@ -7,28 +7,56 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    
+
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # Important for GitVersion
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v3
+        uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: 9.0.x
+          # The SDK that builds the repo comes from global.json, so it never
+          # drifts from what developers use locally. The extra 8.0.x install
+          # provides the .NET 8 runtime so the net8.0 test target is exercised
+          # on its own runtime rather than rolling forward.
+          global-json-file: global.json
+          dotnet-version: 8.0.x
 
       - name: Install GitVersion
-        uses: gittools/actions/gitversion/setup@v0.10.2
+        uses: gittools/actions/gitversion/setup@v4
         with:
-          versionSpec: '5.x'
+          versionSpec: '6.x'
 
       - name: Determine Version
         id: gitversion
-        uses: gittools/actions/gitversion/execute@v0.10.2
+        uses: gittools/actions/gitversion/execute@v4
+
+      - name: Display Version
+        run: |
+          echo "SemVer: ${{ steps.gitversion.outputs.semVer }}"
 
       - name: Build
         run: dotnet build --configuration Release /p:Version=${{ steps.gitversion.outputs.semVer }}
 
       - name: Test
         run: dotnet test --configuration Release --no-build
+
+      # Packaging is part of this library's contract, so a PR that breaks the
+      # package (missing TFM asset, bad dependency group) should fail here
+      # rather than at release time.
+      - name: Pack
+        run: dotnet pack --configuration Release --no-build /p:Version=${{ steps.gitversion.outputs.semVer }} --output ./artifacts
+
+      - name: Verify package contents
+        run: |
+          set -euo pipefail
+          nupkg=$(ls ./artifacts/GossNet.Protocol.*.nupkg)
+          echo "Inspecting $nupkg"
+          for tfm in netstandard2.0 net8.0 net10.0; do
+            if ! unzip -l "$nupkg" | grep -q "lib/$tfm/GossNet.Protocol.dll"; then
+              echo "::error::Package is missing the $tfm assembly"
+              exit 1
+            fi
+            echo "  found lib/$tfm/GossNet.Protocol.dll"
+          done

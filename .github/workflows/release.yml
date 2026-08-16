@@ -13,27 +13,31 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # Important for GitVersion
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v3
+        uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: 9.0.x
+          # SDK from global.json; the extra 8.0.x install provides the .NET 8
+          # runtime the net8.0 test target needs.
+          global-json-file: global.json
+          dotnet-version: 8.0.x
 
       - name: Install GitVersion
-        uses: gittools/actions/gitversion/setup@v0.10.2
+        uses: gittools/actions/gitversion/setup@v4
         with:
-          versionSpec: '5.x'
+          versionSpec: '6.x'
 
       - name: Determine Version
         id: gitversion
-        uses: gittools/actions/gitversion/execute@v0.10.2
+        uses: gittools/actions/gitversion/execute@v4
 
       - name: Display Version
         run: |
           echo "SemVer: ${{ steps.gitversion.outputs.semVer }}"
+          echo "MajorMinorPatch: ${{ steps.gitversion.outputs.majorMinorPatch }}"
 
       - name: Build
         run: dotnet build --configuration Release /p:Version=${{ steps.gitversion.outputs.semVer }}
@@ -42,21 +46,25 @@ jobs:
         run: dotnet test --configuration Release --no-build
 
       - name: Pack
-        run: dotnet pack --configuration Release --no-build /p:Version=${{ steps.gitversion.outputs.semVer }} --output .
+        run: dotnet pack --configuration Release --no-build /p:Version=${{ steps.gitversion.outputs.semVer }} --output ./artifacts
 
       - name: Create Release and Upload Asset
         run: |
-          gh release create v${{ env.GitVersion_MajorMinorPatch }} \
-            --title "Release v${{ env.GitVersion_MajorMinorPatch }}" \
+          set -euo pipefail
+          gh release create v${{ steps.gitversion.outputs.majorMinorPatch }} \
+            --title "Release v${{ steps.gitversion.outputs.majorMinorPatch }}" \
             --generate-notes
 
-          gh release upload v${{ env.GitVersion_MajorMinorPatch }} \
-            ./GossNet.Protocol.${{ steps.gitversion.outputs.semVer }}.nupkg
+          gh release upload v${{ steps.gitversion.outputs.majorMinorPatch }} \
+            ./artifacts/GossNet.Protocol.${{ steps.gitversion.outputs.semVer }}.nupkg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # --skip-duplicate covers the symbol package too; pushing the .nupkg
+      # alongside its .snupkg is what makes SourceLink step-through work for
+      # consumers debugging into the library.
       - name: Push to NuGet
-        run: dotnet nuget push "*.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+        run: dotnet nuget push "./artifacts/*.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
 
       - name: Push to GitHub Packages
         run: |
@@ -64,5 +72,6 @@ jobs:
           dotnet nuget remove source github || true
           dotnet nuget add source --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text --name github "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
 
-          # Push package
-          dotnet nuget push "*.nupkg" --source github --skip-duplicate
+          # Push package. GitHub Packages rejects symbol packages, so unlike the
+          # nuget.org push above this one opts out of the automatic .snupkg upload.
+          dotnet nuget push "./artifacts/*.nupkg" --source github --skip-duplicate --no-symbols
