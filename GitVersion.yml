@@ -7,6 +7,14 @@
 #   * `prevent-increment-of-merged-branch-version:` moved under `prevent-increment:`.
 mode: ContinuousDelivery
 
+# The root increment is the fallback used when no branch configuration matches --
+# which is exactly what happens on a CI `push` build, because actions/checkout
+# leaves HEAD detached and GitVersion cannot resolve a branch name. It must be a
+# concrete value: the default `Inherit` has nothing to inherit from in that state
+# and makes the Mainline strategy throw
+# "Specified argument was out of the range of valid values. (Parameter 'strategy')".
+increment: Patch
+
 strategies:
   - Mainline
   - MergeMessage
