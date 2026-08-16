@@ -68,6 +68,9 @@ jobs:
 
           check GossNet.Protocol netstandard2.0 net8.0 net10.0
           check GossNet.Discovery.Consul netstandard2.0 net8.0 net10.0
+          # Kubernetes deliberately has a narrower set: KubernetesClient ships no
+          # netstandard2.0 asset, which is why this provider is a separate package.
+          check GossNet.Discovery.Kubernetes net8.0 net10.0
 
           # The whole point of shipping discovery providers separately is that their
           # dependencies stay out of the core package.
