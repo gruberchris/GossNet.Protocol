@@ -33,7 +33,18 @@ public class GossNetConfiguration
     public int Port { get; init; } = 9055;
 
     /// <summary>Gets the neighbour discovery mechanism.</summary>
+    /// <remarks>Ignored when <see cref="DiscoveryProvider"/> is set.</remarks>
     public NodeDiscovery NodeDiscovery { get; init; }
+
+    /// <summary>
+    /// Gets an explicit discovery provider, overriding <see cref="NodeDiscovery"/>.
+    /// </summary>
+    /// <remarks>
+    /// This is how mechanisms outside the core package are supplied — the Consul,
+    /// Kubernetes and Docker providers ship separately so the core package stays free
+    /// of their dependencies. Any custom <see cref="INodeDiscovery"/> works here too.
+    /// </remarks>
+    public INodeDiscovery? DiscoveryProvider { get; init; }
 
     /// <summary>Gets the neighbours used when <see cref="NodeDiscovery"/> is <see cref="NodeDiscovery.StaticList"/>.</summary>
     public IEnumerable<GossNetNodeHostEntry> StaticNodes { get; init; } = new List<GossNetNodeHostEntry>();

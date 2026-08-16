@@ -47,7 +47,9 @@ branches:
   # Without this they fall through to the fallback config and PR builds get an
   # unlabelled version indistinguishable from a release build.
   feature:
-    regex: ^features?[/-]|^fix[/-]|^chore[/-]|^docs?[/-]|^refactor[/-]|^tests?[/-]|^perf[/-]
+    # feat(ure)? rather than features? -- the latter did not match the `feat/` prefix
+    # this repo actually uses, so those branches fell through to the fallback config.
+    regex: ^feat(ure)?s?[/-]|^fix[/-]|^chore[/-]|^docs?[/-]|^refactor[/-]|^tests?[/-]|^perf[/-]
     # Feature branches keep ContinuousDelivery so PR builds stay clearly labelled
     # prereleases (0.1.19-alpha.1) and can never be mistaken for a release.
     mode: ContinuousDelivery
