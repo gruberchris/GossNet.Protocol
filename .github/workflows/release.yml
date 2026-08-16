@@ -16,6 +16,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # Important for GitVersion
+          # Check the branch out attached rather than at a detached SHA. With a
+          # detached HEAD, GitVersion has to guess which branch a commit belongs
+          # to by searching every branch that contains it, and picks the wrong
+          # one -- which produced a prerelease version (0.1.18-2) on main.
+          ref: ${{ github.ref_name }}
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -39,6 +44,19 @@ jobs:
           echo "SemVer: ${{ steps.gitversion.outputs.semVer }}"
           echo "MajorMinorPatch: ${{ steps.gitversion.outputs.majorMinorPatch }}"
 
+      # A build of main must produce a clean release version. If a prerelease tag
+      # appears here, GitVersion resolved the branch incorrectly and the version
+      # is wrong -- fail before anything is published rather than shipping it.
+      - name: Guard against prerelease version on main
+        run: |
+          set -euo pipefail
+          tag='${{ steps.gitversion.outputs.preReleaseTag }}'
+          if [ -n "$tag" ]; then
+            echo "::error::Refusing to release: main resolved to prerelease version ${{ steps.gitversion.outputs.semVer }} (preReleaseTag='$tag')."
+            exit 1
+          fi
+          echo "Release version ${{ steps.gitversion.outputs.semVer }} is clean."
+
       - name: Build
         run: dotnet build --configuration Release /p:Version=${{ steps.gitversion.outputs.semVer }}
 
@@ -48,18 +66,12 @@ jobs:
       - name: Pack
         run: dotnet pack --configuration Release --no-build /p:Version=${{ steps.gitversion.outputs.semVer }} --output ./artifacts
 
-      - name: Create Release and Upload Asset
-        run: |
-          set -euo pipefail
-          gh release create v${{ steps.gitversion.outputs.majorMinorPatch }} \
-            --title "Release v${{ steps.gitversion.outputs.majorMinorPatch }}" \
-            --generate-notes
-
-          gh release upload v${{ steps.gitversion.outputs.majorMinorPatch }} \
-            ./artifacts/GossNet.Protocol.${{ steps.gitversion.outputs.semVer }}.nupkg
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+      # Package pushes come BEFORE the GitHub release is created. The previous
+      # order created the release first, so when the nuget.org push failed the
+      # repo was left with tags/releases (v0.1.17, v0.1.18) advertising versions
+      # that were never actually published. Publishing first means a tag only
+      # ever exists for a version that really shipped.
+      #
       # --skip-duplicate covers the symbol package too; pushing the .nupkg
       # alongside its .snupkg is what makes SourceLink step-through work for
       # consumers debugging into the library.
@@ -75,3 +87,15 @@ jobs:
           # Push package. GitHub Packages rejects symbol packages, so unlike the
           # nuget.org push above this one opts out of the automatic .snupkg upload.
           dotnet nuget push "./artifacts/*.nupkg" --source github --skip-duplicate --no-symbols
+
+      - name: Create Release and Upload Asset
+        run: |
+          set -euo pipefail
+          gh release create v${{ steps.gitversion.outputs.majorMinorPatch }} \
+            --title "Release v${{ steps.gitversion.outputs.majorMinorPatch }}" \
+            --generate-notes
+
+          gh release upload v${{ steps.gitversion.outputs.majorMinorPatch }} \
+            ./artifacts/GossNet.Protocol.${{ steps.gitversion.outputs.semVer }}.nupkg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
