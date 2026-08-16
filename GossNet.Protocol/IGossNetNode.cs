@@ -2,33 +2,44 @@ using System.Threading.Channels;
 
 namespace GossNet.Protocol;
 
-public interface IGossNetNode<T> : IDisposable where T : GossNetMessageBase, new()
+/// <summary>
+/// A participant in a GossNet network.
+/// </summary>
+/// <typeparam name="T">The gossip message type.</typeparam>
+public interface IGossNetNode<T> : IDisposable, IAsyncDisposable where T : GossNetMessageBase, new()
 {
     /// <summary>
-    /// Subscribes to incoming GossNet messages.
+    /// Creates a subscription that receives every message this node accepts.
     /// </summary>
-    Task<ChannelReader<GossNetChannelMessage<T>>> SubscribeAsync();
-    
+    /// <returns>
+    /// A subscription owning its own <see cref="ChannelReader{T}"/>. Dispose it to stop
+    /// receiving messages.
+    /// </returns>
+    /// <remarks>
+    /// Subscribing is cheap and does no I/O, so it is deliberately synchronous.
+    /// Multiple subscriptions each receive every message.
+    /// </remarks>
+    IGossNetSubscription<T> Subscribe();
+
     /// <summary>
-    /// Unsubscribes from incoming GossNet messages.
-    /// </summary>
-    /// <param name="reader">The channel reader.</param>
-    Task UnsubscribeAsync(ChannelReader<GossNetChannelMessage<T>> reader);
-    
-    /// <summary>
-    /// Sends a message to other nodes in the network.
+    /// Sends a message to the node's neighbours.
     /// </summary>
     /// <param name="message">The message to send.</param>
-    /// <returns>The number of bytes sent.</returns>
-    Task<int> SendAsync(T message);
-    
+    /// <param name="cancellationToken">Cancels the send.</param>
+    /// <returns>The number of neighbours the message was successfully sent to.</returns>
+    Task<int> SendAsync(T message, CancellationToken cancellationToken = default);
+
     /// <summary>
-    /// Starts the node, enabling it to receive and process messages.
+    /// Starts receiving and processing messages. Calling this on a started node does nothing.
     /// </summary>
     void Start();
-    
+
     /// <summary>
-    /// Stops the node from receiving and processing messages.
+    /// Stops receiving and processing messages. Calling this on a stopped node does nothing.
     /// </summary>
+    /// <remarks>
+    /// A stopped node can be started again; existing subscriptions remain valid across a
+    /// stop/start cycle.
+    /// </remarks>
     Task StopAsync();
 }

@@ -120,33 +120,21 @@ node1.Start();
 node2.Start();
 node3.Start();
 
-// Setup subscriptions
-_ = Task.Run(async () =>
+// Setup subscriptions. Each subscription owns its own queue, so every
+// subscriber receives every message.
+void Listen(GossNetNode<ChatMessage> node, string label) => _ = Task.Run(async () =>
 {
-    var reader1 = await node1.SubscribeAsync();
-    await foreach (var messageItem in reader1.ReadAllAsync())
+    using var subscription = node.Subscribe();
+
+    await foreach (var messageItem in subscription.Reader.ReadAllAsync())
     {
-        Console.WriteLine($"[{messageItem.Message.Timestamp} on Node 1] {messageItem.Message.Username} : {messageItem.Message.Content}");
+        Console.WriteLine($"[{messageItem.Message.Timestamp} on {label}] {messageItem.Message.Username} : {messageItem.Message.Content}");
     }
 });
 
-_ = Task.Run(async () =>
-{
-    var reader2 = await node2.SubscribeAsync();
-    await foreach (var messageItem in reader2.ReadAllAsync())
-    {
-        Console.WriteLine($"[{messageItem.Message.Timestamp} on Node 2] {messageItem.Message.Username} : {messageItem.Message.Content}");
-    }
-});
-
-_ = Task.Run(async () =>
-{
-    var reader3 = await node3.SubscribeAsync();
-    await foreach (var messageItem in reader3.ReadAllAsync())
-    {
-        Console.WriteLine($"[{messageItem.Message.Timestamp} on Node 3] {messageItem.Message.Username} : {messageItem.Message.Content}");
-    }
-});
+Listen(node1, "Node 1");
+Listen(node2, "Node 2");
+Listen(node3, "Node 3");
 
 // Send a message from node 1
 var message = new ChatMessage
@@ -198,6 +186,12 @@ This epidemic spreading ensures the message reaches all nodes in the network eff
 - Automatic handling of duplicate messages
 - Custom message types through generic implementation
 - Simple subscription model for message handling using .NET channels
+
+Each call to `Subscribe()` returns an independent subscription with its own bounded
+queue, so multiple subscribers on the same node all receive every message. The queue
+size is set by `GossNetConfiguration.SubscriberQueueCapacity` (default 1024); when a
+subscriber falls behind, its oldest message is dropped rather than stalling the node.
+Dispose the subscription to stop receiving.
 
 ## Service Discovery
 

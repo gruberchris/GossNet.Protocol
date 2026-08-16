@@ -21,6 +21,11 @@
         <None Include="../README.md" Pack="true" PackagePath="\"/>
     </ItemGroup>
 
+    <!-- Lets tests exercise internal setters directly instead of via reflection. -->
+    <ItemGroup>
+        <InternalsVisibleTo Include="GossNet.Protocol.Tests"/>
+    </ItemGroup>
+
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
