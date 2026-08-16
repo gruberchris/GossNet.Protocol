@@ -10,6 +10,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GossNet.Discovery.Tests", "
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GossNet.Discovery.Kubernetes", "GossNet.Discovery.Kubernetes\GossNet.Discovery.Kubernetes.csproj", "{FFE32CE2-A309-423C-896A-2582EBDBDA12}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GossNet.Discovery.Docker", "GossNet.Discovery.Docker\GossNet.Discovery.Docker.csproj", "{8F8AA680-2FB6-4D39-BE9D-7EA1F33B9B1E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -80,6 +82,18 @@ Global
 		{FFE32CE2-A309-423C-896A-2582EBDBDA12}.Release|x64.Build.0 = Release|Any CPU
 		{FFE32CE2-A309-423C-896A-2582EBDBDA12}.Release|x86.ActiveCfg = Release|Any CPU
 		{FFE32CE2-A309-423C-896A-2582EBDBDA12}.Release|x86.Build.0 = Release|Any CPU
+		{8F8AA680-2FB6-4D39-BE9D-7EA1F33B9B1E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8F8AA680-2FB6-4D39-BE9D-7EA1F33B9B1E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8F8AA680-2FB6-4D39-BE9D-7EA1F33B9B1E}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{8F8AA680-2FB6-4D39-BE9D-7EA1F33B9B1E}.Debug|x64.Build.0 = Debug|Any CPU
+		{8F8AA680-2FB6-4D39-BE9D-7EA1F33B9B1E}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{8F8AA680-2FB6-4D39-BE9D-7EA1F33B9B1E}.Debug|x86.Build.0 = Debug|Any CPU
+		{8F8AA680-2FB6-4D39-BE9D-7EA1F33B9B1E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8F8AA680-2FB6-4D39-BE9D-7EA1F33B9B1E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8F8AA680-2FB6-4D39-BE9D-7EA1F33B9B1E}.Release|x64.ActiveCfg = Release|Any CPU
+		{8F8AA680-2FB6-4D39-BE9D-7EA1F33B9B1E}.Release|x64.Build.0 = Release|Any CPU
+		{8F8AA680-2FB6-4D39-BE9D-7EA1F33B9B1E}.Release|x86.ActiveCfg = Release|Any CPU
+		{8F8AA680-2FB6-4D39-BE9D-7EA1F33B9B1E}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
