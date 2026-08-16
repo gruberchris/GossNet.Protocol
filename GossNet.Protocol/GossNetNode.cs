@@ -19,6 +19,7 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     private readonly IUdpClient _udpClient;
     private readonly ILogger<GossNetNode<T>> _logger;
     private readonly ExpiringMessageCache<T> _processedMessages;
+    private readonly INodeDiscovery _discovery;
     private readonly string _nodePrefix;
 
     /// <summary>Serializes sends, which originate from both callers and the receive loop.</summary>
@@ -46,6 +47,11 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     public GossNetNode(GossNetConfiguration configuration, ILogger<GossNetNode<T>>? logger = null, IUdpClient? udpClient = null)
     {
         _configuration = configuration;
+
+        // Resolved up front so a node configured for a discovery mechanism that is not
+        // available fails here rather than silently gossiping to nobody.
+        _discovery = GossNetDiscovery.CreateProvider(configuration);
+
         _udpClient = udpClient ?? new UdpClientAdapter(configuration.Port);
         _udpClient.EnableBroadcast = true;
         _logger = logger ?? NullLogger<GossNetNode<T>>.Instance;
@@ -322,9 +328,9 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
                 "or split it across multiple messages.");
         }
 
-        var neighbours = GossNetDiscovery.GetNeighbours(_configuration).ToArray();
+        var neighbours = await _discovery.GetNeighboursAsync(cancellationToken).ConfigureAwait(false);
 
-        _logger.LogDebug("{Prefix}Found {Count} neighbours", _nodePrefix, neighbours.Length);
+        _logger.LogDebug("{Prefix}Found {Count} neighbours", _nodePrefix, neighbours.Count);
 
         var sentCount = 0;
 

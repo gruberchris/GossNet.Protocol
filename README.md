@@ -195,13 +195,37 @@ Dispose the subscription to stop receiving.
 
 ## Service Discovery
 
-| Method      | Description                     | Status  |
-|-------------|---------------------------------|---------|
-| DNS         | Discover nodes using DNS        | Done    |
-| Consul      | Discover nodes using Consul     | Planned |
-| Kubernetes  | Discover nodes using Kubernetes | Planned |
-| Docker      | Discover nodes using Docker     | Planned |
-| Static List | Manually configure node list    | Done    |
+| Method      | Description                     | Status  | Package                       |
+|-------------|---------------------------------|---------|-------------------------------|
+| DNS         | Discover nodes using DNS        | Done    | built in                      |
+| Static List | Manually configure node list    | Done    | built in                      |
+| Consul      | Discover nodes using Consul     | Planned | `GossNet.Discovery.Consul`    |
+| Kubernetes  | Discover nodes using Kubernetes | Planned | `GossNet.Discovery.Kubernetes`|
+| Docker      | Discover nodes using Docker     | Planned | `GossNet.Discovery.Docker`    |
+
+Mechanisms outside the core package are supplied through `DiscoveryProvider`, which
+keeps their dependencies out of `GossNet.Protocol`. Selecting a mechanism whose
+provider has not been supplied throws at construction rather than silently resolving
+no neighbours.
+
+You can plug in your own by implementing `INodeDiscovery`:
+
+```csharp
+public sealed class MyDiscovery : INodeDiscovery
+{
+    public ValueTask<IReadOnlyList<GossNetNodeHostEntry>> GetNeighboursAsync(CancellationToken ct = default) =>
+        new([new GossNetNodeHostEntry { Hostname = "10.0.0.2", Port = 9055 }]);
+}
+
+var config = new GossNetConfiguration
+{
+    Hostname = "10.0.0.1",
+    DiscoveryProvider = new MyDiscovery()
+};
+```
+
+Providers are called on the message path, so they should cache. The built-in DNS
+provider caches for 30 seconds by default and excludes the node's own addresses.
 
 
 ## License
