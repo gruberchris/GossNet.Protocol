@@ -95,7 +95,9 @@ jobs:
             --title "Release v${{ steps.gitversion.outputs.majorMinorPatch }}" \
             --generate-notes
 
+          # Every package in the repo, not just the core one: the discovery providers
+          # ship as their own packages.
           gh release upload v${{ steps.gitversion.outputs.majorMinorPatch }} \
-            ./artifacts/GossNet.Protocol.${{ steps.gitversion.outputs.semVer }}.nupkg
+            ./artifacts/*.nupkg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

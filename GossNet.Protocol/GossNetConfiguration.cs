@@ -46,6 +46,27 @@ public class GossNetConfiguration
     /// </remarks>
     public INodeDiscovery? DiscoveryProvider { get; init; }
 
+    /// <summary>
+    /// Gets a factory that builds the discovery provider from this configuration.
+    /// </summary>
+    /// <remarks>
+    /// Use this when a provider needs the node's own identity — to exclude the node
+    /// from its own results, for example — which is otherwise circular, since the
+    /// provider would have to be constructed before the configuration that describes it.
+    /// Takes precedence over <see cref="NodeDiscovery"/>, but not over
+    /// <see cref="DiscoveryProvider"/>.
+    /// </remarks>
+    /// <example>
+    /// <code>
+    /// var configuration = new GossNetConfiguration
+    /// {
+    ///     Hostname = "10.0.0.1",
+    ///     DiscoveryProviderFactory = cfg => new ConsulNodeDiscovery(cfg, consulOptions)
+    /// };
+    /// </code>
+    /// </example>
+    public Func<GossNetConfiguration, INodeDiscovery>? DiscoveryProviderFactory { get; init; }
+
     /// <summary>Gets the neighbours used when <see cref="NodeDiscovery"/> is <see cref="NodeDiscovery.StaticList"/>.</summary>
     public IEnumerable<GossNetNodeHostEntry> StaticNodes { get; init; } = new List<GossNetNodeHostEntry>();
 

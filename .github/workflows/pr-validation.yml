@@ -51,12 +51,31 @@ jobs:
       - name: Verify package contents
         run: |
           set -euo pipefail
-          nupkg=$(ls ./artifacts/GossNet.Protocol.*.nupkg)
-          echo "Inspecting $nupkg"
-          for tfm in netstandard2.0 net8.0 net10.0; do
-            if ! unzip -l "$nupkg" | grep -q "lib/$tfm/GossNet.Protocol.dll"; then
-              echo "::error::Package is missing the $tfm assembly"
+
+          check() {
+            local id="$1"; shift
+            local nupkg
+            nupkg=$(ls ./artifacts/$id.[0-9]*.nupkg)
+            echo "Inspecting $nupkg"
+            for tfm in "$@"; do
+              if ! unzip -l "$nupkg" | grep -q "lib/$tfm/$id.dll"; then
+                echo "::error::$id is missing the $tfm assembly"
+                exit 1
+              fi
+              echo "  found lib/$tfm/$id.dll"
+            done
+          }
+
+          check GossNet.Protocol netstandard2.0 net8.0 net10.0
+          check GossNet.Discovery.Consul netstandard2.0 net8.0 net10.0
+
+          # The whole point of shipping discovery providers separately is that their
+          # dependencies stay out of the core package.
+          core_nuspec=$(unzip -p ./artifacts/GossNet.Protocol.[0-9]*.nupkg '*.nuspec')
+          for forbidden in Consul KubernetesClient Docker.DotNet; do
+            if echo "$core_nuspec" | grep -q "id=\"$forbidden\""; then
+              echo "::error::GossNet.Protocol must not depend on $forbidden"
               exit 1
             fi
-            echo "  found lib/$tfm/GossNet.Protocol.dll"
           done
+          echo "  core package carries no provider dependencies"
