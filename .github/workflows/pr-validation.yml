@@ -71,6 +71,7 @@ jobs:
           check GossNet.Discovery.Azure netstandard2.0 net8.0 net10.0
           check GossNet.Discovery.Consul netstandard2.0 net8.0 net10.0
           check GossNet.Discovery.Docker netstandard2.0 net8.0 net10.0
+          check GossNet.Discovery.Gcp netstandard2.0 net8.0 net10.0
           check GossNet.Discovery.Redis netstandard2.0 net8.0 net10.0
           # Kubernetes and etcd deliberately have a narrower set: neither KubernetesClient
           # nor dotnet-etcd ships a netstandard2.0 asset, which is part of why these
@@ -81,7 +82,7 @@ jobs:
           # The whole point of shipping discovery providers separately is that their
           # dependencies stay out of the core package.
           core_nuspec=$(unzip -p ./artifacts/GossNet.Protocol.[0-9]*.nupkg '*.nuspec')
-          for forbidden in Consul KubernetesClient Docker.DotNet AWSSDK.EC2 StackExchange.Redis dotnet-etcd Azure.Identity; do
+          for forbidden in Consul KubernetesClient Docker.DotNet AWSSDK.EC2 StackExchange.Redis dotnet-etcd Azure.Identity Google.Cloud.Compute.V1; do
             if echo "$core_nuspec" | grep -q "id=\"$forbidden\""; then
               echo "::error::GossNet.Protocol must not depend on $forbidden"
               exit 1

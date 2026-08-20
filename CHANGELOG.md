@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 version is below 1.0.0, breaking changes ship in minor releases.
 
+## [0.7.0]
+
+### Added
+
+- `GossNet.Discovery.Gcp` with `GceLabelNodeDiscovery`: finds cluster members by a Compute
+  Engine instance **label**, completing the three major clouds alongside the AWS and Azure
+  providers. Nothing registers itself. Instances are listed aggregated across every zone
+  with `ReturnPartialSuccess`, so one unreachable zone degrades the result rather than
+  failing the lookup. Running instances only. Needs `compute.instances.list`, granted by
+  `roles/compute.viewer`.
+
+  Note that Compute Engine labels are not network tags: network tags are unkeyed strings for
+  firewall rules, while labels are the key/value metadata equivalent to an AWS or Azure tag.
+  On GKE, use `GossNet.Discovery.Kubernetes` instead — the pods are what you want to
+  discover, not the nodes hosting them.
+
 ## [0.6.0]
 
 Push-based discovery, and the last three backends. Purely additive — no existing API
