@@ -25,7 +25,9 @@ public sealed class ConsulWatchTests
     {
         try
         {
-            _consul = new ConsulBuilder().WithImage("hashicorp/consul:1.20").Build();
+            // The image goes to the constructor, not WithImage: Testcontainers 4.14
+            // obsoleted the parameterless overload.
+            _consul = new ConsulBuilder("hashicorp/consul:1.20").Build();
 
             await _consul.StartAsync().ConfigureAwait(false);
         }
