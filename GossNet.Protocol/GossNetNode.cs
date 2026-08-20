@@ -17,6 +17,8 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     private static readonly TimeSpan MaxWatchRetryDelay = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan DisposeStopTimeout = TimeSpan.FromSeconds(5);
 
+    private const int MaxConcurrentSends = 32;
+
     private readonly GossNetConfiguration _configuration;
     private readonly IUdpClient _udpClient;
     private readonly ILogger<GossNetNode<T>> _logger;
@@ -45,8 +47,12 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
 
     private readonly string _nodePrefix;
 
-    /// <summary>Serializes sends, which originate from both callers and the receive loop.</summary>
-    private readonly SemaphoreSlim _sendGate = new(1, 1);
+    /// <summary>
+    /// Bounds in-flight sends. Datagram sends on one socket are safe to issue
+    /// concurrently — the kernel serializes them — so this is a throughput cap, not a
+    /// correctness lock.
+    /// </summary>
+    private readonly SemaphoreSlim _sendConcurrency = new(MaxConcurrentSends, MaxConcurrentSends);
 
     /// <summary>Guards <see cref="_subscribers"/> and the start/stop/dispose lifecycle.</summary>
     private readonly object _syncRoot = new();
@@ -558,6 +564,34 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
 
     private async Task<int> SocializeMessageAsync(T message, CancellationToken cancellationToken)
     {
+        // A watching provider has already told us the membership, so asking again would
+        // just re-read its cache.
+        var neighbours = _watchedNeighbours
+            ?? await _discovery.GetNeighboursAsync(cancellationToken).ConfigureAwait(false);
+
+        _logger.LogDebug("{Prefix}Found {Count} neighbours", _nodePrefix, neighbours.Count);
+
+        var targets = new List<GossNetNodeHostEntry>(neighbours.Count);
+
+        foreach (var neighbour in neighbours)
+        {
+            if (IsAlreadyNotified(message, neighbour))
+            {
+                _logger.LogTrace("{Prefix}Skipping already notified neighbour {Neighbour} for message id: {Id}",
+                    _nodePrefix, neighbour, message.Id);
+                continue;
+            }
+
+            targets.Add(neighbour);
+        }
+
+        // Recorded before serializing so the recipients see each other in the notified
+        // list and skip echoing the message back and forth.
+        if (_configuration.AddRecipientsToNotifiedNodes && targets.Count > 0)
+        {
+            message.NotifiedNodes = [.. message.NotifiedNodes, .. targets];
+        }
+
         var data = Encoding.UTF8.GetBytes(message.Serialize());
 
         if (_protector is not null)
@@ -577,55 +611,75 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
                 "Reduce the message size or split it across multiple messages.");
         }
 
-        // A watching provider has already told us the membership, so asking again would
-        // just re-read its cache.
-        var neighbours = _watchedNeighbours
-            ?? await _discovery.GetNeighboursAsync(cancellationToken).ConfigureAwait(false);
+        if (targets.Count == 0)
+        {
+            return 0;
+        }
 
-        _logger.LogDebug("{Prefix}Found {Count} neighbours", _nodePrefix, neighbours.Count);
+        if (targets.Count == 1)
+        {
+            return await SendToNeighbourAsync(data, targets[0], message.Id, cancellationToken).ConfigureAwait(false);
+        }
+
+        // Fanned out in parallel: datagram sends are independent, and awaiting each in
+        // turn made a large neighbour list pay one round of send latency per member.
+        var sends = new Task<int>[targets.Count];
+
+        for (var i = 0; i < targets.Count; i++)
+        {
+            sends[i] = SendToNeighbourAsync(data, targets[i], message.Id, cancellationToken);
+        }
+
+        var results = await Task.WhenAll(sends).ConfigureAwait(false);
 
         var sentCount = 0;
 
-        foreach (var neighbour in neighbours)
+        foreach (var result in results)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (IsAlreadyNotified(message, neighbour))
-            {
-                _logger.LogTrace("{Prefix}Skipping already notified neighbour {Neighbour} for message id: {Id}",
-                    _nodePrefix, neighbour, message.Id);
-                continue;
-            }
-
-            await _sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-
-            try
-            {
-                var sent = await _udpClient.SendAsync(data, neighbour.Hostname, neighbour.Port, cancellationToken).ConfigureAwait(false);
-
-                if (sent > 0)
-                {
-                    sentCount++;
-                    _logger.LogTrace("{Prefix}Sent message id: {Id} as {Bytes} bytes to {Neighbour}",
-                        _nodePrefix, message.Id, sent, neighbour);
-                }
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                // One unreachable neighbour must not stop the message reaching the others.
-                _logger.LogError(ex, "{Prefix}Error sending message id: {Id} to {Neighbour}", _nodePrefix, message.Id, neighbour);
-            }
-            finally
-            {
-                _sendGate.Release();
-            }
+            sentCount += result;
         }
 
         return sentCount;
+    }
+
+    /// <summary>
+    /// Sends one datagram to one neighbour, reporting 1 on success and 0 on failure.
+    /// </summary>
+    private async Task<int> SendToNeighbourAsync(byte[] data, GossNetNodeHostEntry neighbour, Guid messageId, CancellationToken cancellationToken)
+    {
+        // Caps how many sends are in flight at once, so a very large neighbour list
+        // cannot swamp the socket's buffers or the thread pool.
+        await _sendConcurrency.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            var sent = await _udpClient.SendAsync(data, neighbour.Hostname, neighbour.Port, cancellationToken).ConfigureAwait(false);
+
+            if (sent > 0)
+            {
+                _logger.LogTrace("{Prefix}Sent message id: {Id} as {Bytes} bytes to {Neighbour}",
+                    _nodePrefix, messageId, sent, neighbour);
+
+                return 1;
+            }
+
+            return 0;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // One unreachable neighbour must not stop the message reaching the others.
+            _logger.LogError(ex, "{Prefix}Error sending message id: {Id} to {Neighbour}", _nodePrefix, messageId, neighbour);
+
+            return 0;
+        }
+        finally
+        {
+            _sendConcurrency.Release();
+        }
     }
 
     private static bool IsAlreadyNotified(T message, GossNetNodeHostEntry neighbour)
@@ -739,7 +793,7 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
         }
 
         _udpClient.Dispose();
-        _sendGate.Dispose();
+        _sendConcurrency.Dispose();
 
         // MemoryCache owns a timer, so failing to dispose the cache leaked one per node.
         _processedMessages.Dispose();

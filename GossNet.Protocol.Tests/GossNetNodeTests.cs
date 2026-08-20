@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using GossNet.Protocol.Tests.Mocks;
@@ -586,6 +587,65 @@ public class GossNetNodeTests
         var sent = await _node.SendAsync(message);
 
         Assert.AreEqual(2, sent);
+    }
+
+    [TestMethod]
+    public async Task SendAsync_OneUnreachableNeighbour_DoesNotStopTheOthers()
+    {
+        _udpClient.SendFault = hostname => hostname == "neighbour-a" ? new SocketException() : null;
+
+        var sent = await _node.SendAsync(new TestMessage { Data = "hello" });
+
+        Assert.AreEqual(1, sent);
+        Assert.AreEqual(1, _udpClient.SentPackets.Count);
+        Assert.AreEqual("neighbour-b", _udpClient.SentPackets[0].Hostname);
+    }
+
+    [TestMethod]
+    public async Task AddRecipientsToNotifiedNodes_ListsRecipientsInTheTransmittedMessage()
+    {
+        var configuration = new GossNetConfiguration
+        {
+            Hostname = "self",
+            Port = 9100,
+            NodeDiscovery = NodeDiscovery.StaticList,
+            StaticNodes = [NeighbourA, NeighbourB],
+            AddRecipientsToNotifiedNodes = true
+        };
+
+        var udpClient = new MockUdpClient();
+        await using var node = new GossNetNode<TestMessage>(configuration, udpClient: udpClient);
+
+        await node.SendAsync(new TestMessage { Data = "hello" });
+
+        Assert.AreEqual(2, udpClient.SentPackets.Count);
+
+        // Every transmitted copy lists both recipients, so neither echoes to the other.
+        foreach (var packet in udpClient.SentPackets)
+        {
+            var onTheWire = new TestMessage();
+            onTheWire.Deserialize(Encoding.UTF8.GetString(packet.Datagram));
+
+            var notified = onTheWire.NotifiedNodes.Select(n => n.ToString()).ToArray();
+
+            CollectionAssert.Contains(notified, "neighbour-a:9101");
+            CollectionAssert.Contains(notified, "neighbour-b:9102");
+            CollectionAssert.Contains(notified, "self:9100");
+        }
+    }
+
+    [TestMethod]
+    public async Task DefaultBehaviour_DoesNotListRecipients()
+    {
+        await _node.SendAsync(new TestMessage { Data = "hello" });
+
+        var onTheWire = new TestMessage();
+        onTheWire.Deserialize(Encoding.UTF8.GetString(_udpClient.SentPackets[0].Datagram));
+
+        // Off by default: the echo redundancy is what delivers through datagram loss.
+        CollectionAssert.AreEqual(
+            new[] { "self:9100" },
+            onTheWire.NotifiedNodes.Select(n => n.ToString()).ToArray());
     }
 
     [TestMethod]

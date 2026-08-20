@@ -117,6 +117,29 @@ public class GossNetConfiguration
     public TimeSpan? MessageMaxAge { get; init; }
 
     /// <summary>
+    /// Gets whether the nodes a message is being sent to are recorded in
+    /// <see cref="GossNetMessageBase.NotifiedNodes"/> before it is transmitted.
+    /// Defaults to false.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Off, a node fanning a message out to several neighbours lists none of them, so
+    /// the recipients immediately echo it to each other; de-duplication discards the
+    /// echoes, but the redundant traffic grows with how densely the cluster is
+    /// connected. On, recipients see each other in the notified list and skip the
+    /// echo, cutting traffic substantially in well-connected clusters.
+    /// </para>
+    /// <para>
+    /// The trade-off is delivery robustness: a recipient is marked notified at the
+    /// moment of sending, so if that datagram is lost, the peers who would have echoed
+    /// it now skip that node, and it must wait to hear the message via some other path.
+    /// Leave this off when datagram loss is likely and duplicate suppression traffic
+    /// is affordable.
+    /// </para>
+    /// </remarks>
+    public bool AddRecipientsToNotifiedNodes { get; init; }
+
+    /// <summary>
     /// Gets the maximum number of undelivered messages buffered per subscriber. Defaults to 1024.
     /// </summary>
     /// <remarks>
