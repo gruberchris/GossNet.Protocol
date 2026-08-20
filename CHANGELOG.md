@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 version is below 1.0.0, breaking changes ship in minor releases.
 
+## [0.5.0]
+
+Two more ways to find neighbours: one that needs no configuration at all, and one for AWS.
+
+### Added
+
+- `MulticastNodeDiscovery` and `NodeDiscovery.Multicast`: nodes announce themselves to a
+  multicast group and listen for each other, with no registry, seeds or addresses to
+  configure. Announcements use their own socket, kept separate from the message socket so
+  discovery traffic never reaches the node's receive loop. Local network only — the default
+  TTL of 1 keeps announcements on the link and most cloud networks drop multicast.
+  Configurable through `MulticastDiscoveryOptions`; `IMulticastChannel` is the seam for
+  testing without a socket.
+- `GossNet.Discovery.Aws` with `Ec2TagNodeDiscovery`: finds cluster members by an EC2
+  instance tag, the way Consul and Serf auto-join on AWS. Nothing registers itself. Requires
+  the `ec2:DescribeInstances` IAM action. Running instances only, paginated in full.
+
+### Fixed
+
+- A node now disposes a discovery provider it created itself. Previously nothing did, so any
+  provider holding resources leaked them for the lifetime of the process — which multicast
+  discovery, with a socket and two background loops, would have done every time. Providers
+  supplied through `DiscoveryProvider` or `DiscoveryProviderFactory` are still left to the
+  caller, since they may be shared between nodes.
+
 ## [0.4.0]
 
 Discovery no longer has to depend on something outside the network. Purely additive — no

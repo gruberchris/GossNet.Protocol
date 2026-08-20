@@ -206,7 +206,9 @@ even in case of partial network failures.
 | DNS           | Discover nodes using DNS                     | Done   | built in                       |
 | Static List   | Manually configure node list                 | Done   | built in                       |
 | Peer Exchange | Learn nodes from the gossip traffic itself   | Done   | built in                       |
+| Multicast     | Announce on a multicast group, LAN only      | Done   | built in                       |
 | Composite     | Combine several mechanisms into one          | Done   | built in                       |
+| AWS EC2       | Discover instances by tag                    | Done   | `GossNet.Discovery.Aws`        |
 | Consul        | Discover nodes using Consul                  | Done   | `GossNet.Discovery.Consul`     |
 | Kubernetes    | Discover nodes using Kubernetes              | Done   | `GossNet.Discovery.Kubernetes` |
 | Docker        | Discover nodes using Docker                  | Done   | `GossNet.Discovery.Docker`     |
@@ -215,10 +217,11 @@ even in case of partial network failures.
 > covers both: Swarm's `tasks.<service>` and a headless Service's DNS name each resolve to
 > every instance's address. Point `Hostname` at that name and use `NodeDiscovery.Dns`.
 
-The first four are built in. The rest ship as separate packages so their client dependencies
+The first five are built in. The rest ship as separate packages so their client dependencies
 stay out of the core package:
 
 ```shell
+dotnet add package GossNet.Discovery.Aws
 dotnet add package GossNet.Discovery.Consul
 dotnet add package GossNet.Discovery.Kubernetes
 dotnet add package GossNet.Discovery.Docker
@@ -279,6 +282,44 @@ messages, or live peers will be forgotten and re-learned in a cycle.
 
 Any provider can learn this way by implementing `IObservingNodeDiscovery`; the node feeds it
 each message's notified list and ignores providers that do not implement it.
+
+### Multicast
+
+The least ceremony of any mechanism: nodes announce themselves to a multicast group and
+listen for everyone else doing the same. No registry, no seeds, no addresses to configure.
+
+```csharp
+var configuration = new GossNetConfiguration
+{
+    Hostname = "10.0.0.4",
+    Port = 9055,
+    NodeDiscovery = NodeDiscovery.Multicast
+};
+```
+
+Announcements go out every `AnnounceInterval` (2s) on their own socket, separate from the
+one carrying messages, and a peer is forgotten after `PeerTimeout` (10s) of silence. Keep
+the timeout a small multiple of the interval: multicast is unreliable, and treating one lost
+announcement as a departure would make the neighbour list flap.
+
+```csharp
+DiscoveryProviderFactory = cfg => new MulticastNodeDiscovery(cfg, new MulticastDiscoveryOptions
+{
+    GroupAddress = "239.255.42.99",
+    Port = 9056,
+    AnnounceInterval = TimeSpan.FromSeconds(2),
+    PeerTimeout = TimeSpan.FromSeconds(10),
+    TimeToLive = 1
+})
+```
+
+> **Local network only.** The default TTL of 1 keeps announcements on the local link, and
+> most cloud networks drop multicast outright. Use a registry-backed provider or peer
+> exchange anywhere routed.
+
+Announcements carry the node's configured `Hostname` and `Port`, so — as with peer exchange
+— those must be reachable by the other nodes. A node ignores its own announcement, so
+loopback can stay enabled for nodes sharing a host.
 
 ### Combining mechanisms
 

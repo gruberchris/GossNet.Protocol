@@ -67,6 +67,7 @@ jobs:
           }
 
           check GossNet.Protocol netstandard2.0 net8.0 net10.0
+          check GossNet.Discovery.Aws netstandard2.0 net8.0 net10.0
           check GossNet.Discovery.Consul netstandard2.0 net8.0 net10.0
           # Kubernetes deliberately has a narrower set: KubernetesClient ships no
           # netstandard2.0 asset, which is why this provider is a separate package.
@@ -76,7 +77,7 @@ jobs:
           # The whole point of shipping discovery providers separately is that their
           # dependencies stay out of the core package.
           core_nuspec=$(unzip -p ./artifacts/GossNet.Protocol.[0-9]*.nupkg '*.nuspec')
-          for forbidden in Consul KubernetesClient Docker.DotNet; do
+          for forbidden in Consul KubernetesClient Docker.DotNet AWSSDK.EC2; do
             if echo "$core_nuspec" | grep -q "id=\"$forbidden\""; then
               echo "::error::GossNet.Protocol must not depend on $forbidden"
               exit 1

@@ -27,6 +27,12 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     /// </summary>
     private readonly IObservingNodeDiscovery? _observer;
 
+    /// <summary>
+    /// Whether this node built its own discovery provider and must therefore dispose it.
+    /// A caller-supplied provider may be shared between nodes and is left alone.
+    /// </summary>
+    private readonly bool _ownsDiscovery;
+
     private readonly string _nodePrefix;
 
     /// <summary>Serializes sends, which originate from both callers and the receive loop.</summary>
@@ -57,7 +63,7 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
 
         // Resolved up front so a node configured for a discovery mechanism that is not
         // available fails here rather than silently gossiping to nobody.
-        _discovery = GossNetDiscovery.CreateProvider(configuration);
+        (_discovery, _ownsDiscovery) = GossNetDiscovery.CreateProvider(configuration);
         _observer = _discovery as IObservingNodeDiscovery;
 
         _udpClient = udpClient ?? new UdpClientAdapter(configuration.Port);
@@ -522,6 +528,13 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
 
         // MemoryCache owns a timer, so failing to dispose the cache leaked one per node.
         _processedMessages.Dispose();
+
+        // Only a provider this node built. Multicast discovery holds a socket and two
+        // background loops, so leaving it undisposed leaks both for the process lifetime.
+        if (_ownsDiscovery)
+        {
+            (_discovery as IDisposable)?.Dispose();
+        }
     }
 
     private void ThrowIfDisposed()

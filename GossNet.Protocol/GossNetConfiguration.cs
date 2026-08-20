@@ -24,7 +24,13 @@ public enum NodeDiscovery
     /// Start from <see cref="GossNetConfiguration.StaticNodes"/> as seeds and learn the rest
     /// of the network from the messages themselves.
     /// </summary>
-    PeerExchange
+    PeerExchange,
+
+    /// <summary>
+    /// Announce to, and listen on, a multicast group. Zero configuration, but local network
+    /// only.
+    /// </summary>
+    Multicast
 }
 
 /// <summary>

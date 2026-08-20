@@ -26,6 +26,7 @@
     <!-- Discovery provider packages. These ship separately from GossNet.Protocol so
          their dependencies stay out of the core package. -->
     <ItemGroup>
+        <PackageVersion Include="AWSSDK.EC2" Version="4.0.110.2" />
         <PackageVersion Include="Consul" Version="1.8.0" />
         <PackageVersion Include="Docker.DotNet" Version="3.125.15" />
         <PackageVersion Include="KubernetesClient" Version="19.0.2" />
