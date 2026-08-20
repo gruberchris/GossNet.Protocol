@@ -66,17 +66,14 @@ The default `Serialize` already includes your properties, so overriding it is op
 
 ### 2. Create and start nodes
 
+The logger is optional — any `Microsoft.Extensions.Logging` implementation works, and
+omitting it uses `NullLogger`:
+
 ```csharp
 using GossNet.Protocol;
 using Microsoft.Extensions.Logging;
-using Serilog;
 
-var serilogLogger = new LoggerConfiguration()
-    .MinimumLevel.Information()
-    .WriteTo.Console()
-    .CreateLogger();
-
-var loggerFactory = new LoggerFactory().AddSerilog(serilogLogger);
+using var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
 var logger = loggerFactory.CreateLogger<GossNetNode<ChatMessage>>();
 
 var node1 = new GossNetNode<ChatMessage>(new GossNetConfiguration
@@ -180,15 +177,25 @@ Messages travel in a single UDP datagram, so a serialized message must fit withi
 
 ## How GossNet.Protocol Works
 
-GossNet nodes use UDP for message communication. When a node receives or sends a message:
+GossNet nodes use UDP for message communication.
 
-1. It marks itself as "notified" in the message metadata
-2. It processes the message (delivering it to every subscriber)
-3. It forwards the message to all neighbors that haven't been notified yet
+**Receiving a message:**
 
-Duplicate messages are recognised by id and discarded, so a message never loops. This
-epidemic spreading ensures the message reaches all nodes in the network efficiently,
-even in case of partial network failures.
+1. If the id has been seen recently, the message is discarded — this is what stops a message
+   looping forever around a cyclic network.
+2. Otherwise the node marks itself as "notified" in the message metadata.
+3. It delivers the message to every subscriber.
+4. It forwards the message to all neighbours not already listed as notified.
+
+**Sending a message** does steps 2 and 4 only. The originating node does **not** deliver its
+own message to its own subscribers — a subscription reports what arrived from the network,
+not what this node published. Hand the payload to your local code directly if you need both.
+
+That is why a message's reach is measured against the *other* nodes: on a five-node cluster,
+a successful flood is four deliveries, not five.
+
+This epidemic spreading gets a message to every node efficiently, and keeps working when
+part of the network is unreachable.
 
 ## Features
 
@@ -197,7 +204,10 @@ even in case of partial network failures.
 - Automatic handling of duplicate messages
 - Custom message types through generic implementation
 - Broadcast subscription model built on .NET channels, with per-subscriber backpressure
-- Pluggable node discovery
+- Twelve discovery mechanisms, from static lists to the three major clouds — or none at all,
+  learning the network from its own traffic
+- Providers can be combined, and those with a change feed push membership instead of being
+  polled
 
 ## Service Discovery
 
@@ -404,12 +414,22 @@ Discovery runs on the message path, so providers should cache. Deriving from
 `CachingNodeDiscovery` gives you a short-lived result cache and self-exclusion. The
 built-in DNS provider caches for 30 seconds and excludes the node's own addresses.
 
-## Upgrading to 0.3.0
+**Disposal follows ownership.** A node disposes only a provider it built itself from
+`NodeDiscovery` — one supplied through `DiscoveryProvider` or `DiscoveryProviderFactory` may
+be shared between nodes, so disposing it is left to you. Implement `IDisposable` on a
+provider that holds a socket, connection or background loop; the built-in multicast provider
+does all three.
 
-0.3.0 fixes several defects that could not be corrected without changing the API. The
-library is pre-1.0, so breaking changes ship in a minor release. Upgrading from 0.1.16 —
-the previous release on a feed, since no 0.2.x was ever published — means taking all of
-the changes below at once.
+## Upgrading from 0.1.x to 0.3.0
+
+**Only relevant if you are coming from 0.1.16 or earlier.** Every release since — 0.4.0
+through the current one — has been purely additive, so upgrading within 0.3.0+ needs no code
+changes. See [CHANGELOG.md](CHANGELOG.md) for what each added.
+
+0.3.0 fixed several defects that could not be corrected without changing the API. The library
+is pre-1.0, so breaking changes ship in a minor release. Coming from 0.1.16 — the last
+release on a feed before it, since no 0.2.x was ever published — means taking all of the
+changes below at once.
 
 ### Subscriptions
 
