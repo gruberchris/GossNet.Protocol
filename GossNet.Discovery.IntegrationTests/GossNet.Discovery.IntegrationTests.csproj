@@ -17,6 +17,7 @@
     <ItemGroup>
         <PackageReference Include="MSTest"/>
         <PackageReference Include="Testcontainers.Consul"/>
+        <PackageReference Include="Testcontainers.K3s"/>
     </ItemGroup>
 
     <ItemGroup>
@@ -25,6 +26,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\GossNet.Discovery.Consul\GossNet.Discovery.Consul.csproj"/>
+        <ProjectReference Include="..\GossNet.Discovery.Kubernetes\GossNet.Discovery.Kubernetes.csproj"/>
         <ProjectReference Include="..\GossNet.Protocol\GossNet.Protocol.csproj"/>
     </ItemGroup>
 

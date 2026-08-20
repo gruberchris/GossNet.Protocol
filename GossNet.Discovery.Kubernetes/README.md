@@ -53,6 +53,32 @@ node.Start();
 needs the node's own address and port to exclude itself — the pod running the node
 matches its own label selector.
 
+## Watching
+
+`KubernetesNodeDiscovery` implements `IWatchableNodeDiscovery`, so a pod joining or leaving
+reaches a node as it happens rather than after `CacheDuration`. Nothing needs enabling —
+`GossNetNode.Start()` subscribes automatically, and falls back to cached polling if the watch
+fails.
+
+A Kubernetes watch is not a durable subscription. It is opened at a `resourceVersion` and
+ends on its own: the API server closes idle connections, and once the starting version has
+aged out of etcd's compaction window the server answers `410 Gone` rather than replaying from
+it.
+
+Both are handled the same way, and structurally rather than by inspecting status codes: every
+iteration re-lists to obtain a fresh `resourceVersion` before opening the next watch. A `410`
+recovers by the same path as an idle disconnect, and there is no way to accidentally resume
+from a version the server has already rejected.
+
+The watch reports one pod at a time while a neighbour list has to be complete, so a change
+signals a re-list rather than being applied as a delta.
+
+Because these are server behaviours, they are verified against a real k3s cluster in
+`GossNet.Discovery.IntegrationTests` rather than against a fake.
+
+A custom `IKubernetesPodLookup` keeps working unchanged; it simply will not watch. Implement
+`IWatchablePodLookup` as well to opt in.
+
 ## Options
 
 | Option | Default | Description |
