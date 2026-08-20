@@ -397,6 +397,135 @@ public class GossNetNodeTests
     }
 
     // ---------------------------------------------------------------------------
+    // Authentication.
+    // ---------------------------------------------------------------------------
+
+    private static readonly byte[] ClusterKey = Encoding.UTF8.GetBytes("cluster-shared-key-0123456789");
+
+    private static GossNetNode<TestMessage> AuthenticatedNode(MockUdpClient udpClient, TimeSpan? maxAge = null)
+    {
+        var configuration = new GossNetConfiguration
+        {
+            Hostname = "self",
+            Port = 9100,
+            NodeDiscovery = NodeDiscovery.StaticList,
+            StaticNodes = [NeighbourA],
+            DatagramProtector = new HmacDatagramProtector(ClusterKey),
+            MessageMaxAge = maxAge
+        };
+
+        return new GossNetNode<TestMessage>(configuration, udpClient: udpClient);
+    }
+
+    [TestMethod]
+    public async Task AuthenticatedNodes_ExchangeMessages()
+    {
+        var udpClient = new MockUdpClient();
+        await using var node = AuthenticatedNode(udpClient);
+        using var subscription = node.Subscribe();
+
+        node.Start();
+
+        // What one authenticated node sends, another accepts: feed a sent datagram
+        // straight back in as if a peer had produced it.
+        await node.SendAsync(new TestMessage { Data = "outbound" });
+        Assert.AreEqual(1, udpClient.SentPackets.Count);
+
+        var peerProtector = new HmacDatagramProtector(ClusterKey);
+        var inbound = peerProtector.Protect(Datagram(new TestMessage { Data = "inbound" }));
+        udpClient.EnqueueReceive(inbound);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var received = await subscription.Reader.ReadAsync(cts.Token);
+
+        Assert.AreEqual("inbound", received.Message.Data);
+    }
+
+    [TestMethod]
+    public async Task AuthenticatedNode_DropsPlaintextAndForgedDatagrams()
+    {
+        var udpClient = new MockUdpClient();
+        await using var node = AuthenticatedNode(udpClient);
+        using var subscription = node.Subscribe();
+
+        node.Start();
+
+        // A plaintext message, and one signed with the wrong key.
+        udpClient.EnqueueReceive(Datagram(new TestMessage { Data = "plaintext-injection" }));
+
+        var attacker = new HmacDatagramProtector(Encoding.UTF8.GetBytes("attacker-key-9876543210abcdef"));
+        udpClient.EnqueueReceive(attacker.Protect(Datagram(new TestMessage { Data = "forged" })));
+
+        // Followed by a legitimate one, proving the junk was dropped without stalling.
+        var peer = new HmacDatagramProtector(ClusterKey);
+        udpClient.EnqueueReceive(peer.Protect(Datagram(new TestMessage { Data = "legitimate" })));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var received = await subscription.Reader.ReadAsync(cts.Token);
+
+        Assert.AreEqual("legitimate", received.Message.Data, "only the authenticated message may be delivered");
+        Assert.IsFalse(subscription.Reader.TryRead(out _), "the plaintext and forged messages must not be delivered");
+    }
+
+    [TestMethod]
+    public async Task AuthenticatedSend_TransmitsProtectedDatagrams()
+    {
+        var udpClient = new MockUdpClient();
+        await using var node = AuthenticatedNode(udpClient);
+
+        await node.SendAsync(new TestMessage { Data = "wire-check" });
+
+        var verifier = new HmacDatagramProtector(ClusterKey);
+
+        Assert.AreEqual(1, udpClient.SentPackets.Count);
+        Assert.IsTrue(verifier.TryUnprotect(udpClient.SentPackets[0].Datagram, out _),
+            "outgoing datagrams must carry a valid frame");
+    }
+
+    [TestMethod]
+    public async Task StaleMessage_IsDroppedWhenAuthenticated()
+    {
+        var udpClient = new MockUdpClient();
+        await using var node = AuthenticatedNode(udpClient, maxAge: TimeSpan.FromMinutes(5));
+        using var subscription = node.Subscribe();
+
+        node.Start();
+
+        var peer = new HmacDatagramProtector(ClusterKey);
+
+        // A captured datagram replayed after its id has left the dedup cache would
+        // otherwise be accepted as new; the freshness window closes that gap.
+        var stale = new TestMessage { Data = "replayed" };
+        stale.Timestamp = DateTime.UtcNow.AddMinutes(-10);
+        udpClient.EnqueueReceive(peer.Protect(Datagram(stale)));
+
+        udpClient.EnqueueReceive(peer.Protect(Datagram(new TestMessage { Data = "fresh" })));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var received = await subscription.Reader.ReadAsync(cts.Token);
+
+        Assert.AreEqual("fresh", received.Message.Data, "the stale message must be dropped");
+        Assert.IsFalse(subscription.Reader.TryRead(out _));
+    }
+
+    [TestMethod]
+    public async Task OversizedAuthenticatedMessage_ThrowsAClearError()
+    {
+        var udpClient = new MockUdpClient();
+        await using var node = AuthenticatedNode(udpClient);
+
+        // The size check runs against the protected datagram, so the frame's overhead
+        // counts toward the limit and the error says so.
+        var message = new TestMessage { Data = new string('x', GossNetMessageBase.MaxDatagramBytes + 1) };
+
+        var exception = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            async () => await node.SendAsync(message));
+
+        StringAssert.Contains(exception.Message, "protection overhead");
+        Assert.AreEqual(0, udpClient.SentPackets.Count);
+    }
+
+    // ---------------------------------------------------------------------------
     // Gossip behaviour.
     // ---------------------------------------------------------------------------
 

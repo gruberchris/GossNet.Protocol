@@ -86,6 +86,37 @@ public class GossNetConfiguration
     public int MessageTtlSeconds { get; init; } = 600;
 
     /// <summary>
+    /// Gets the protector that authenticates datagrams, or null for plaintext.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// When set, every outgoing gossip message and multicast discovery announcement is
+    /// wrapped by the protector, and every received datagram that fails verification is
+    /// dropped before it is parsed. Anything that can reach the UDP port can otherwise
+    /// inject messages into subscribers and, with peer exchange, poison the peer table.
+    /// </para>
+    /// <para>
+    /// Use <see cref="HmacDatagramProtector"/> with the same key on every node. All nodes
+    /// in a cluster must agree: a node without the protector cannot talk to nodes with it.
+    /// </para>
+    /// </remarks>
+    public IDatagramProtector? DatagramProtector { get; init; }
+
+    /// <summary>
+    /// Gets how old a received message may be before it is dropped. Defaults to
+    /// <see cref="MessageTtlSeconds"/>. Only applied when <see cref="DatagramProtector"/>
+    /// is set.
+    /// </summary>
+    /// <remarks>
+    /// The de-duplication cache already blocks replays within <see cref="MessageTtlSeconds"/>;
+    /// this window closes the gap after it, where a captured datagram could otherwise be
+    /// replayed verbatim once its id has been forgotten. It assumes reasonably synchronized
+    /// clocks across nodes — only messages <em>older</em> than the window are rejected, so
+    /// a node with a fast clock is tolerated.
+    /// </remarks>
+    public TimeSpan? MessageMaxAge { get; init; }
+
+    /// <summary>
     /// Gets the maximum number of undelivered messages buffered per subscriber. Defaults to 1024.
     /// </summary>
     /// <remarks>

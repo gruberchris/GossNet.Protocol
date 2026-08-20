@@ -22,6 +22,14 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     private readonly ILogger<GossNetNode<T>> _logger;
     private readonly ExpiringMessageCache<T> _processedMessages;
     private readonly INodeDiscovery _discovery;
+    private readonly IDatagramProtector? _protector;
+
+    /// <summary>
+    /// Oldest a received message may be, or null when no freshness check applies. Only
+    /// meaningful alongside <see cref="_protector"/>: without authentication the timestamp
+    /// is attacker-controlled anyway, so a window would only reject honest laggards.
+    /// </summary>
+    private readonly TimeSpan? _messageMaxAge;
 
     /// <summary>
     /// Set when the discovery provider learns from traffic. Resolved once here rather than
@@ -79,6 +87,11 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
         _udpClient.EnableBroadcast = true;
         _logger = logger ?? NullLogger<GossNetNode<T>>.Instance;
         _nodePrefix = $"[{configuration.Hostname}:{configuration.Port}] ";
+
+        _protector = configuration.DatagramProtector;
+        _messageMaxAge = _protector is null
+            ? null
+            : configuration.MessageMaxAge ?? TimeSpan.FromSeconds(configuration.MessageTtlSeconds);
 
         _processedMessages = new ExpiringMessageCache<T>(TimeSpan.FromSeconds(configuration.MessageTtlSeconds));
 
@@ -398,6 +411,20 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     {
         message = null!;
 
+        // Verified before any parsing: when authentication is on, a forged or
+        // plaintext datagram never reaches the deserializer at all.
+        if (_protector is not null)
+        {
+            if (!_protector.TryUnprotect(buffer, out var payload))
+            {
+                _logger.LogDebug("{Prefix}Dropping unauthenticated {Bytes}-byte datagram", _nodePrefix, buffer.Length);
+
+                return false;
+            }
+
+            buffer = payload;
+        }
+
         try
         {
             var data = Encoding.UTF8.GetString(buffer);
@@ -419,6 +446,16 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
 
     private async Task<int> ProcessMessageAsync(T message, CancellationToken cancellationToken)
     {
+        // The dedup cache blocks replays until the id expires from it; this closes the
+        // window after that, where a captured datagram could be replayed verbatim.
+        if (_messageMaxAge is { } maxAge && DateTime.UtcNow - message.Timestamp > maxAge)
+        {
+            _logger.LogDebug("{Prefix}Dropping stale message id: {Id} timestamped {Timestamp:O}",
+                _nodePrefix, message.Id, message.Timestamp);
+
+            return 0;
+        }
+
         if (!_processedMessages.TryAdd(message))
         {
             _logger.LogDebug("{Prefix}Ignoring previously processed message id: {Id}", _nodePrefix, message.Id);
@@ -523,15 +560,21 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     {
         var data = Encoding.UTF8.GetBytes(message.Serialize());
 
+        if (_protector is not null)
+        {
+            data = _protector.Protect(data);
+        }
+
         // Checked here rather than in Serialize so that custom Serialize overrides are
-        // covered too. Without it an oversized payload fails at the socket with an
-        // opaque error that gives no hint the message itself was the problem.
+        // covered too, and after protection so the check reflects what actually goes on
+        // the wire. Without it an oversized payload fails at the socket with an opaque
+        // error that gives no hint the message itself was the problem.
         if (data.Length > GossNetMessageBase.MaxDatagramBytes)
         {
             throw new InvalidOperationException(
-                $"Serialized message id {message.Id} is {data.Length} bytes, which exceeds the maximum UDP " +
-                $"datagram payload of {GossNetMessageBase.MaxDatagramBytes} bytes. Reduce the message size " +
-                "or split it across multiple messages.");
+                $"Serialized message id {message.Id} is {data.Length} bytes including any protection overhead, " +
+                $"which exceeds the maximum UDP datagram payload of {GossNetMessageBase.MaxDatagramBytes} bytes. " +
+                "Reduce the message size or split it across multiple messages.");
         }
 
         // A watching provider has already told us the membership, so asking again would
