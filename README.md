@@ -210,7 +210,7 @@ even in case of partial network failures.
 | Composite     | Combine several mechanisms into one          |         | built in                       |
 | AWS EC2       | Discover instances by tag                    |         | `GossNet.Discovery.Aws`        |
 | Azure         | Discover virtual machines by tag             |         | `GossNet.Discovery.Azure`      |
-| Consul        | Discover nodes using Consul                  |         | `GossNet.Discovery.Consul`     |
+| Consul        | Discover nodes using Consul                  | ✅      | `GossNet.Discovery.Consul`     |
 | Docker        | Discover nodes using Docker                  |         | `GossNet.Discovery.Docker`     |
 | Google Cloud  | Discover Compute Engine instances by label   |         | `GossNet.Discovery.Gcp`        |
 | etcd          | Register under a lease, discover by prefix   | ✅      | `GossNet.Discovery.Etcd`       |
@@ -369,7 +369,8 @@ public interface IWatchableNodeDiscovery : INodeDiscovery
 ```
 
 Nothing needs enabling. `GossNetNode.Start()` subscribes when the provider implements it and
-uses each pushed list in place of polling. `GossNet.Discovery.Etcd` implements it today.
+uses each pushed list in place of polling. `GossNet.Discovery.Etcd` and
+`GossNet.Discovery.Consul` implement it today.
 
 Two rules for implementors:
 

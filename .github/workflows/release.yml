@@ -67,6 +67,52 @@ jobs:
       - name: Pack
         run: dotnet pack --configuration Release --no-build /p:Version=${{ steps.gitversion.outputs.semVer }} --output ./artifacts
 
+      # Packaging is part of this library's contract, and a published package cannot be
+      # unpublished. The same check runs in pr-validation, but only here does it stand
+      # between a broken package (missing TFM asset, leaked provider dependency) and
+      # nuget.org.
+      - name: Verify package contents
+        run: |
+          set -euo pipefail
+
+          check() {
+            local id="$1"; shift
+            local nupkg
+            nupkg=$(ls ./artifacts/$id.[0-9]*.nupkg)
+            echo "Inspecting $nupkg"
+            for tfm in "$@"; do
+              if ! unzip -l "$nupkg" | grep -q "lib/$tfm/$id.dll"; then
+                echo "::error::$id is missing the $tfm assembly"
+                exit 1
+              fi
+              echo "  found lib/$tfm/$id.dll"
+            done
+          }
+
+          check GossNet.Protocol netstandard2.0 net8.0 net10.0
+          check GossNet.Discovery.Aws netstandard2.0 net8.0 net10.0
+          check GossNet.Discovery.Azure netstandard2.0 net8.0 net10.0
+          check GossNet.Discovery.Consul netstandard2.0 net8.0 net10.0
+          check GossNet.Discovery.Docker netstandard2.0 net8.0 net10.0
+          check GossNet.Discovery.Gcp netstandard2.0 net8.0 net10.0
+          check GossNet.Discovery.Redis netstandard2.0 net8.0 net10.0
+          # Kubernetes and etcd deliberately have a narrower set: neither KubernetesClient
+          # nor dotnet-etcd ships a netstandard2.0 asset, which is part of why these
+          # providers are separate packages rather than built in.
+          check GossNet.Discovery.Kubernetes net8.0 net10.0
+          check GossNet.Discovery.Etcd net8.0 net10.0
+
+          # The whole point of shipping discovery providers separately is that their
+          # dependencies stay out of the core package.
+          core_nuspec=$(unzip -p ./artifacts/GossNet.Protocol.[0-9]*.nupkg '*.nuspec')
+          for forbidden in Consul KubernetesClient Docker.DotNet AWSSDK.EC2 StackExchange.Redis dotnet-etcd Azure.Identity Google.Cloud.Compute.V1; do
+            if echo "$core_nuspec" | grep -q "id=\"$forbidden\""; then
+              echo "::error::GossNet.Protocol must not depend on $forbidden"
+              exit 1
+            fi
+          done
+          echo "  core package carries no provider dependencies"
+
       # Package pushes come BEFORE the GitHub release is created. The previous
       # order created the release first, so when the nuget.org push failed the
       # repo was left with tags/releases (v0.1.17, v0.1.18) advertising versions

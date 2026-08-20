@@ -31,5 +31,27 @@ public sealed class ConsulDiscoveryOptions
     public bool PassingOnly { get; init; } = true;
 
     /// <summary>Gets how long a resolved neighbour list is reused. Defaults to 30 seconds.</summary>
+    /// <remarks>Only consulted when the watch is not running.</remarks>
     public TimeSpan? CacheDuration { get; init; }
+
+    /// <summary>
+    /// Gets how long a blocking query waits for a change before returning unchanged.
+    /// Defaults to five minutes.
+    /// </summary>
+    /// <remarks>
+    /// This is the Consul blocking-query <c>wait</c> parameter, not a timeout on discovery:
+    /// a query that returns unchanged is simply re-issued. Consul caps it at ten minutes and
+    /// adds its own jitter, so a whole cluster does not re-query in lockstep.
+    /// </remarks>
+    public TimeSpan WatchWaitTime { get; init; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Gets how long to wait before re-establishing a blocking query that failed.
+    /// Defaults to two seconds.
+    /// </summary>
+    /// <remarks>
+    /// Without a pause, an agent that is down turns the watch into a hot loop against a
+    /// refused connection.
+    /// </remarks>
+    public TimeSpan WatchRetryDelay { get; init; } = TimeSpan.FromSeconds(2);
 }

@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <!--
+          Watch implementations cannot be verified against a hand-written fake: the thing
+          under test IS the backend's index and resourceVersion behaviour, so a fake would
+          only assert that it agrees with the code calling it. These tests run the real
+          backends in containers.
+        -->
+        <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+        <IsPackable>false</IsPackable>
+        <EnableMSTestRunner>true</EnableMSTestRunner>
+        <OutputType>Exe</OutputType>
+        <RollForward>Major</RollForward>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="MSTest"/>
+        <PackageReference Include="Testcontainers.Consul"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\GossNet.Discovery.Consul\GossNet.Discovery.Consul.csproj"/>
+        <ProjectReference Include="..\GossNet.Protocol\GossNet.Protocol.csproj"/>
+    </ItemGroup>
+
+</Project>
