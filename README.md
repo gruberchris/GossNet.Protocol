@@ -224,11 +224,18 @@ Nodes are built to keep gossiping through infrastructure trouble:
   backoff, polling in the meantime; the etcd provider also re-registers itself if its
   lease is lost.
 
-Datagrams queue in the OS socket buffer between arriving and being processed, and a burst
-that outruns processing overflows it — the OS silently drops the excess. Gossip tolerates
-loss by design (other nodes re-deliver), but if your workload is bursty, raise
-`GossNetConfiguration.ReceiveBufferSize` above the OS default, which is under 1&nbsp;MB on
-some systems.
+A burst of messages can outrun consumption at two points, and each has its own knob:
+
+- **The subscriber queue** (`SubscriberQueueCapacity`, default 1024): when a subscriber
+  reads slower than messages arrive, its oldest buffered message is dropped and a warning
+  is logged. This is the limit a burst hits first in practice — check for the warning
+  before suspecting the network.
+- **The OS socket buffer** (`ReceiveBufferSize`): datagrams queue here between arriving
+  and the node reading them one at a time. Overflow is dropped silently by the OS, and
+  the default is under 1&nbsp;MB on some systems.
+
+Gossip tolerates loss by design — other nodes re-deliver — but bursty workloads recover
+faster with both raised.
 
 ## Message size
 
