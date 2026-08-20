@@ -256,10 +256,12 @@ Discovery runs on the message path, so providers should cache. Deriving from
 `CachingNodeDiscovery` gives you a short-lived result cache and self-exclusion. The
 built-in DNS provider caches for 30 seconds and excludes the node's own addresses.
 
-## Upgrading to 0.2.0
+## Upgrading to 0.3.0
 
-0.2.0 fixes several defects that could not be corrected without changing the API. The
-library is pre-1.0, so breaking changes ship in a minor release.
+0.3.0 fixes several defects that could not be corrected without changing the API. The
+library is pre-1.0, so breaking changes ship in a minor release. Upgrading from 0.1.16 —
+the previous release on a feed, since no 0.2.x was ever published — means taking all of
+the changes below at once.
 
 ### Subscriptions
 

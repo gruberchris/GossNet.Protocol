@@ -6,10 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 version is below 1.0.0, breaking changes ship in minor releases.
 
-## [0.2.0]
+## [0.3.0]
 
 A correctness and modernization release. Several of the fixes could not be made without
-changing the public API; see [Upgrading to 0.2.0](README.md#upgrading-to-020).
+changing the public API; see [Upgrading to 0.3.0](README.md#upgrading-to-030).
+
+There is no 0.2.x release. This work was briefly numbered 0.2.0 before it shipped, but
+the publishing pipeline was broken throughout that period, so nothing under 0.2 ever
+reached a feed. 0.1.16 is the previous release consumers can install.
 
 ### Added
 

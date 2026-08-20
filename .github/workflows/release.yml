@@ -1,8 +1,9 @@
 name: Release
 
 permissions:
-  contents: write
-  packages: write
+  contents: write # gh release create
+  packages: write # GitHub Packages push
+  id-token: write # OIDC token for nuget.org Trusted Publishing
 
 on:
   push:
@@ -75,8 +76,25 @@ jobs:
       # --skip-duplicate covers the symbol package too; pushing the .nupkg
       # alongside its .snupkg is what makes SourceLink step-through work for
       # consumers debugging into the library.
+
+      # Trusted Publishing: exchange this job's GitHub OIDC token for a temporary
+      # nuget.org API key. Replaces the long-lived NUGET_API_KEY secret, whose
+      # expiry silently broke every release from 2026-08-16 onwards with a 403.
+      #
+      # The key lives for one hour, so this step sits immediately before the push
+      # rather than at the top of the job.
+      #
+      # `user` is the nuget.org profile name, NOT an email address. It is already
+      # public as the package owner; move it to a secret if you would rather it
+      # not appear here.
+      - name: Get a short-lived NuGet API key
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: gruberchris
+
       - name: Push to NuGet
-        run: dotnet nuget push "./artifacts/*.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+        run: dotnet nuget push "./artifacts/*.nupkg" --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
 
       - name: Push to GitHub Packages
         run: |
