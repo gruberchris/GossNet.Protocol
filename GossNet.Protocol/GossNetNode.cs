@@ -49,7 +49,14 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
 
     private CancellationTokenSource? _cancellationTokenSource;
     private Task? _processingTask;
+    private Task? _watchTask;
     private bool _disposed;
+
+    /// <summary>
+    /// The latest list pushed by a watching provider, or null when none is active. Read on
+    /// the send path in preference to querying the provider.
+    /// </summary>
+    private volatile IReadOnlyList<GossNetNodeHostEntry>? _watchedNeighbours;
 
     /// <summary>
     /// Initializes a new node.
@@ -155,6 +162,45 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
             // CancellationToken.None: the token cancels the loop from the inside, it must
             // not prevent the task being scheduled or the task would never observe it.
             _processingTask = Task.Run(() => ProcessLoopAsync(token), CancellationToken.None);
+
+            if (_discovery is IWatchableNodeDiscovery watchable)
+            {
+                _watchTask = Task.Run(() => WatchLoopAsync(watchable, token), CancellationToken.None);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Keeps <see cref="_watchedNeighbours"/> current from a provider that pushes changes.
+    /// </summary>
+    /// <remarks>
+    /// A watch is an optimization, never a requirement. If the backend's change feed fails,
+    /// the snapshot is dropped and the node returns to asking the provider per message —
+    /// slower to notice membership changes, but still correct. Taking the node down because
+    /// a watch broke would be strictly worse than polling.
+    /// </remarks>
+    private async Task WatchLoopAsync(IWatchableNodeDiscovery watchable, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var neighbours in watchable.WatchAsync(cancellationToken).ConfigureAwait(false))
+            {
+                _watchedNeighbours = neighbours;
+
+                _logger.LogDebug("{Prefix}Discovery watch reported {Count} neighbours", _nodePrefix, neighbours.Count);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Shutdown.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "{Prefix}Discovery watch failed; falling back to polling", _nodePrefix);
+        }
+        finally
+        {
+            _watchedNeighbours = null;
         }
     }
 
@@ -163,13 +209,16 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     {
         CancellationTokenSource? cancellationTokenSource;
         Task? processingTask;
+        Task? watchTask;
 
         lock (_syncRoot)
         {
             cancellationTokenSource = _cancellationTokenSource;
             processingTask = _processingTask;
+            watchTask = _watchTask;
             _cancellationTokenSource = null;
             _processingTask = null;
+            _watchTask = null;
         }
 
         if (cancellationTokenSource is null)
@@ -200,6 +249,21 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
                 _logger.LogError(ex, "{Prefix}Error waiting for the processing loop to stop", _nodePrefix);
             }
         }
+
+        if (watchTask is not null)
+        {
+            try
+            {
+                await watchTask.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "{Prefix}Error waiting for the discovery watch to stop", _nodePrefix);
+            }
+        }
+
+        // A stopped node must not keep using membership a cancelled watch left behind.
+        _watchedNeighbours = null;
 
         cancellationTokenSource.Dispose();
 
@@ -369,7 +433,10 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
                 "or split it across multiple messages.");
         }
 
-        var neighbours = await _discovery.GetNeighboursAsync(cancellationToken).ConfigureAwait(false);
+        // A watching provider has already told us the membership, so asking again would
+        // just re-read its cache.
+        var neighbours = _watchedNeighbours
+            ?? await _discovery.GetNeighboursAsync(cancellationToken).ConfigureAwait(false);
 
         _logger.LogDebug("{Prefix}Found {Count} neighbours", _nodePrefix, neighbours.Count);
 
@@ -473,6 +540,7 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
 
         CancellationTokenSource? cancellationTokenSource;
         Task? processingTask;
+        Task? watchTask;
 
         lock (_syncRoot)
         {
@@ -485,8 +553,10 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
 
             cancellationTokenSource = _cancellationTokenSource;
             processingTask = _processingTask;
+            watchTask = _watchTask;
             _cancellationTokenSource = null;
             _processingTask = null;
+            _watchTask = null;
         }
 
         _logger.LogInformation("{Prefix}Disposing GossNetNode", _nodePrefix);
@@ -495,6 +565,7 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
         {
             cancellationTokenSource?.Cancel();
             processingTask?.Wait(DisposeStopTimeout);
+            watchTask?.Wait(DisposeStopTimeout);
         }
         catch (Exception ex)
         {

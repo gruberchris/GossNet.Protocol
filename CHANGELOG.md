@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 version is below 1.0.0, breaking changes ship in minor releases.
 
+## [0.6.0]
+
+Push-based discovery, and the last three backends. Purely additive — no existing API
+changed.
+
+### Added
+
+- `IWatchableNodeDiscovery`, an opt-in interface for providers whose backend has a change
+  feed. `GossNetNode.Start()` subscribes when a provider implements it and uses each pushed
+  list in place of polling, cutting the time to notice a membership change from
+  `CacheDuration` to roughly a round trip. A watch that faults is logged and the node falls
+  back to polling, because a broken change feed should make discovery slower, never broken.
+- `GossNet.Discovery.Etcd` with `EtcdNodeDiscovery`: registers under a lease so a crashed
+  node's key expires on its own, discovers by key prefix, and is the first provider to
+  implement `IWatchableNodeDiscovery`. Targets `net8.0` and `net10.0` only — `dotnet-etcd`
+  ships no `netstandard2.0` asset.
+- `GossNet.Discovery.Redis` with `RedisNodeDiscovery`: nodes heartbeat into a shared sorted
+  set scored by timestamp, so liveness is one range query with no per-key expiry and no
+  `SCAN`. Deregisters on dispose so a clean shutdown is noticed immediately. The first
+  provider that writes as well as reads.
+- `GossNet.Discovery.Azure` with `AzureTagNodeDiscovery`: finds virtual machines in a
+  resource group by tag, mirroring the AWS provider. Needs only the `Reader` role.
+
 ## [0.5.0]
 
 Two more ways to find neighbours: one that needs no configuration at all, and one for AWS.

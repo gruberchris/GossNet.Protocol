@@ -20,9 +20,12 @@
 
     <ItemGroup>
         <ProjectReference Include="..\GossNet.Discovery.Aws\GossNet.Discovery.Aws.csproj"/>
+        <ProjectReference Include="..\GossNet.Discovery.Azure\GossNet.Discovery.Azure.csproj"/>
         <ProjectReference Include="..\GossNet.Discovery.Consul\GossNet.Discovery.Consul.csproj"/>
         <ProjectReference Include="..\GossNet.Discovery.Docker\GossNet.Discovery.Docker.csproj"/>
+        <ProjectReference Include="..\GossNet.Discovery.Etcd\GossNet.Discovery.Etcd.csproj"/>
         <ProjectReference Include="..\GossNet.Discovery.Kubernetes\GossNet.Discovery.Kubernetes.csproj"/>
+        <ProjectReference Include="..\GossNet.Discovery.Redis\GossNet.Discovery.Redis.csproj"/>
     </ItemGroup>
 
 </Project>

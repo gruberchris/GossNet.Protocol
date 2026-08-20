@@ -27,9 +27,14 @@
          their dependencies stay out of the core package. -->
     <ItemGroup>
         <PackageVersion Include="AWSSDK.EC2" Version="4.0.110.2" />
+        <PackageVersion Include="Azure.Identity" Version="1.21.0" />
+        <PackageVersion Include="Azure.ResourceManager.Compute" Version="1.16.0" />
+        <PackageVersion Include="Azure.ResourceManager.Network" Version="1.16.1" />
         <PackageVersion Include="Consul" Version="1.8.0" />
         <PackageVersion Include="Docker.DotNet" Version="3.125.15" />
+        <PackageVersion Include="dotnet-etcd" Version="9.1.0" />
         <PackageVersion Include="KubernetesClient" Version="19.0.2" />
+        <PackageVersion Include="StackExchange.Redis" Version="3.1.13" />
     </ItemGroup>
 
     <ItemGroup>
