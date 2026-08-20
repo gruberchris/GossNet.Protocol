@@ -27,10 +27,48 @@ public interface IConsulHealthClient : IDisposable
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>The result of a blocking query.</summary>
+/// <param name="Instances">The service instances as of <paramref name="Index"/>.</param>
+/// <param name="Index">
+/// Consul's <c>X-Consul-Index</c> for this result, to be passed to the next query.
+/// </param>
+public sealed record ConsulQueryResult(IReadOnlyList<ConsulServiceInstance> Instances, ulong Index);
+
+/// <summary>
+/// A <see cref="IConsulHealthClient"/> that also supports blocking queries.
+/// </summary>
+/// <remarks>
+/// Separate from <see cref="IConsulHealthClient"/> rather than added to it: that interface
+/// has shipped since 0.3.0, and adding a member would break every existing implementation.
+/// <see cref="ConsulNodeDiscovery"/> watches only when its client implements this.
+/// </remarks>
+public interface IWatchableConsulHealthClient : IConsulHealthClient
+{
+    /// <summary>
+    /// Issues a blocking query, returning when the result changes or the wait elapses.
+    /// </summary>
+    /// <param name="serviceName">The service name.</param>
+    /// <param name="tag">An optional tag instances must carry.</param>
+    /// <param name="passingOnly">Whether to return only instances whose checks pass.</param>
+    /// <param name="waitIndex">
+    /// The index from the previous result, or zero to establish a baseline. Consul holds the
+    /// request open until its index for the service moves past this.
+    /// </param>
+    /// <param name="waitTime">How long Consul may hold the request open.</param>
+    /// <param name="cancellationToken">Cancels the query.</param>
+    ValueTask<ConsulQueryResult> QueryServiceInstancesAsync(
+        string serviceName,
+        string? tag,
+        bool passingOnly,
+        ulong waitIndex,
+        TimeSpan waitTime,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>
 /// <see cref="IConsulHealthClient"/> backed by the Consul HTTP API.
 /// </summary>
-public sealed class ConsulHealthClient : IConsulHealthClient
+public sealed class ConsulHealthClient : IConsulHealthClient, IWatchableConsulHealthClient
 {
     private readonly ConsulClient _client;
     private readonly string? _datacenter;
@@ -81,9 +119,44 @@ public sealed class ConsulHealthClient : IConsulHealthClient
             .Service(serviceName, tag ?? string.Empty, passingOnly, queryOptions, cancellationToken)
             .ConfigureAwait(false);
 
+        return Map(result.Response);
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<ConsulQueryResult> QueryServiceInstancesAsync(
+        string serviceName,
+        string? tag,
+        bool passingOnly,
+        ulong waitIndex,
+        TimeSpan waitTime,
+        CancellationToken cancellationToken = default)
+    {
+        var queryOptions = new QueryOptions
+        {
+            WaitIndex = waitIndex,
+            WaitTime = waitTime
+        };
+
+        if (!string.IsNullOrEmpty(_datacenter))
+        {
+            queryOptions.Datacenter = _datacenter;
+        }
+
+        var result = await _client.Health
+            .Service(serviceName, tag ?? string.Empty, passingOnly, queryOptions, cancellationToken)
+            .ConfigureAwait(false);
+
+        return new ConsulQueryResult(Map(result.Response), result.LastIndex);
+    }
+
+    /// <inheritdoc />
+    public void Dispose() => _client.Dispose();
+
+    private static List<ConsulServiceInstance> Map(IEnumerable<ServiceEntry>? entries)
+    {
         var instances = new List<ConsulServiceInstance>();
 
-        foreach (var entry in result.Response ?? [])
+        foreach (var entry in entries ?? [])
         {
             // Consul convention: a service registered without its own address is
             // reachable at the address of the node hosting it.
@@ -101,7 +174,4 @@ public sealed class ConsulHealthClient : IConsulHealthClient
 
         return instances;
     }
-
-    /// <inheritdoc />
-    public void Dispose() => _client.Dispose();
 }

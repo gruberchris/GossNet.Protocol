@@ -215,6 +215,39 @@ public sealed class ConsulNodeDiscoveryTests
 
         Assert.AreEqual(1, client.Queries);
     }
+
+    /// <summary>
+    /// Consul's blocking-query index rules. Each of these fails silently rather than loudly
+    /// when it is wrong, which is why they are pinned here as well as exercised against a
+    /// real agent in GossNet.Discovery.IntegrationTests.
+    /// </summary>
+    [TestMethod]
+    [DataRow(5UL, 0UL, 5UL, "a normal first result is taken as-is")]
+    [DataRow(9UL, 5UL, 9UL, "a forward move is taken as-is")]
+    [DataRow(5UL, 5UL, 5UL, "an unchanged index stays put, and the caller yields nothing")]
+    [DataRow(3UL, 9UL, 0UL, "a backwards index means Consul reset, so re-baseline from zero")]
+    [DataRow(0UL, 0UL, 1UL, "an index below one would make the next query non-blocking")]
+    public void Normalize_AppliesTheBlockingQueryRules(ulong returned, ulong previous, ulong expected, string because)
+    {
+        Assert.AreEqual(expected, ConsulNodeDiscovery.Normalize(returned, previous), because);
+    }
+
+    /// <summary>A client without blocking-query support leaves the node on cached polling.</summary>
+    [TestMethod]
+    public async Task Watch_CompletesImmediatelyWhenTheClientCannotBlock()
+    {
+        using var discovery = new ConsulNodeDiscovery(Configuration(), Options(), new FakeConsulClient());
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var updates = 0;
+
+        await foreach (var _ in discovery.WatchAsync(cts.Token))
+        {
+            updates++;
+        }
+
+        Assert.AreEqual(0, updates);
+    }
 }
 
 public sealed class ConsulTestMessage : GossNetMessageBase;

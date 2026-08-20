@@ -4,6 +4,12 @@ on:
   pull_request:
     branches: [ main ]
 
+  # Also on direct pushes to main. Branch protection can be bypassed by an admin, and
+  # without this the only thing standing between such a push and a publish is the release
+  # job itself.
+  push:
+    branches: [ main ]
+
 jobs:
   validate:
     runs-on: ubuntu-latest

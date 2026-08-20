@@ -22,6 +22,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GossNet.Discovery.Azure", "
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GossNet.Discovery.Gcp", "GossNet.Discovery.Gcp\GossNet.Discovery.Gcp.csproj", "{21ED8B9B-9FAD-4A5D-B9A2-A32CC30E8A06}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GossNet.Discovery.IntegrationTests", "GossNet.Discovery.IntegrationTests\GossNet.Discovery.IntegrationTests.csproj", "{042D9302-76F3-4F13-9022-B9FD1B3AE4B1}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -164,6 +166,18 @@ Global
 		{21ED8B9B-9FAD-4A5D-B9A2-A32CC30E8A06}.Release|x64.Build.0 = Release|Any CPU
 		{21ED8B9B-9FAD-4A5D-B9A2-A32CC30E8A06}.Release|x86.ActiveCfg = Release|Any CPU
 		{21ED8B9B-9FAD-4A5D-B9A2-A32CC30E8A06}.Release|x86.Build.0 = Release|Any CPU
+		{042D9302-76F3-4F13-9022-B9FD1B3AE4B1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{042D9302-76F3-4F13-9022-B9FD1B3AE4B1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{042D9302-76F3-4F13-9022-B9FD1B3AE4B1}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{042D9302-76F3-4F13-9022-B9FD1B3AE4B1}.Debug|x64.Build.0 = Debug|Any CPU
+		{042D9302-76F3-4F13-9022-B9FD1B3AE4B1}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{042D9302-76F3-4F13-9022-B9FD1B3AE4B1}.Debug|x86.Build.0 = Debug|Any CPU
+		{042D9302-76F3-4F13-9022-B9FD1B3AE4B1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{042D9302-76F3-4F13-9022-B9FD1B3AE4B1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{042D9302-76F3-4F13-9022-B9FD1B3AE4B1}.Release|x64.ActiveCfg = Release|Any CPU
+		{042D9302-76F3-4F13-9022-B9FD1B3AE4B1}.Release|x64.Build.0 = Release|Any CPU
+		{042D9302-76F3-4F13-9022-B9FD1B3AE4B1}.Release|x86.ActiveCfg = Release|Any CPU
+		{042D9302-76F3-4F13-9022-B9FD1B3AE4B1}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

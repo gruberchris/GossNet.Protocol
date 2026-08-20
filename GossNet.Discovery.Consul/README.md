@@ -41,6 +41,33 @@ node.Start();
 needs the node's own hostname and port to exclude itself from its own results — a node
 registered in Consul always appears in its own service query.
 
+## Watching
+
+`ConsulNodeDiscovery` implements `IWatchableNodeDiscovery` using **blocking queries**, so a
+service registering or deregistering reaches a node in about a round trip rather than after
+`CacheDuration`.
+
+Nothing needs enabling — `GossNetNode.Start()` subscribes automatically. If the watch fails,
+the node logs it and falls back to cached polling.
+
+Each request carries the `X-Consul-Index` from the previous result and the agent holds it
+open until that index moves. Three rules make that correct, and each fails *quietly* rather
+than loudly when it is wrong:
+
+- An index that goes **backwards** means Consul restarted or the table was re-indexed. It
+  must be reset to zero to re-baseline, or the query blocks forever and no further change is
+  ever seen.
+- An index **below one** must be treated as one, or the next query is a non-blocking read
+  and the watch becomes a hot loop.
+- An **unchanged** index means the wait elapsed, not that anything changed, so nothing is
+  published.
+
+Because those are server behaviours, they are verified against a real Consul container in
+`GossNet.Discovery.IntegrationTests` rather than against a fake.
+
+A custom `IConsulHealthClient` keeps working unchanged; it simply will not watch. Implement
+`IWatchableConsulHealthClient` as well to opt in.
+
 ## Options
 
 | Option | Default | Description |
@@ -51,6 +78,8 @@ registered in Consul always appears in its own service query.
 | `Datacenter` | agent's own | Datacenter to query |
 | `Tag` | none | Only return instances carrying this tag |
 | `PassingOnly` | `true` | Only return instances whose health checks pass |
+| `WatchWaitTime` | 5 minutes | How long a blocking query may be held open by the agent |
+| `WatchRetryDelay` | 2 seconds | Pause before re-establishing a failed blocking query |
 | `CacheDuration` | 30 seconds | How long a resolved neighbour list is reused |
 
 Discovery runs on the message path, so results are cached. If Consul cannot be reached,

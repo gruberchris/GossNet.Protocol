@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 version is below 1.0.0, breaking changes ship in minor releases.
 
+## [0.8.0]
+
+### Added
+
+- `ConsulNodeDiscovery` now implements `IWatchableNodeDiscovery`, using Consul blocking
+  queries. Membership changes reach a node in about a round trip instead of after
+  `CacheDuration`. Configurable through `ConsulDiscoveryOptions.WatchWaitTime` and
+  `WatchRetryDelay`.
+- `IWatchableConsulHealthClient`, the opt-in seam a client implements to support blocking
+  queries. Separate from `IConsulHealthClient` rather than added to it, so existing
+  implementations are unaffected; `ConsulHealthClient` implements both. A client without it
+  leaves the node on its normal cached polling.
+- `GossNet.Discovery.IntegrationTests`, which runs the real backends in containers. Watch
+  correctness lives in the backend's index handling, so a hand-written fake could only
+  assert that it agrees with the code calling it.
+
+### Changed
+
+- PR validation now also runs on direct pushes to `main`, not only on pull requests. Branch
+  protection can be bypassed by an admin, and without this the only check between such a
+  push and a publish was the release job itself.
+
 ## [0.7.0]
 
 ### Added

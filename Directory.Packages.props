@@ -41,6 +41,7 @@
     <ItemGroup>
         <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
         <PackageVersion Include="MSTest" Version="4.3.3" />
+        <PackageVersion Include="Testcontainers.Consul" Version="4.14.0" />
     </ItemGroup>
 
 </Project>
