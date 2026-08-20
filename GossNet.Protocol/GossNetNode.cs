@@ -282,13 +282,18 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
             {
                 var received = await _udpClient.ReceiveAsync(cancellationToken).ConfigureAwait(false);
 
-                var data = Encoding.UTF8.GetString(received.Buffer);
+                consecutiveFailures = 0;
+
                 _logger.LogTrace("{Prefix}Received {Bytes} bytes from {EndPoint}", _nodePrefix, received.Buffer.Length, received.RemoteEndPoint);
 
-                var message = new T();
-                message.Deserialize(data);
-
-                consecutiveFailures = 0;
+                // Parsed outside the socket try/catch: a datagram that is not a valid
+                // message — stray traffic, another protocol, deliberate junk — is dropped
+                // without tripping the failure backoff below. Backing off on junk would
+                // let anything that can reach the port stall real messages.
+                if (!TryParseMessage(received.Buffer, out var message))
+                {
+                    continue;
+                }
 
                 await ProcessMessageAsync(message, cancellationToken).ConfigureAwait(false);
             }
@@ -334,6 +339,32 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
         return TimeSpan.FromMilliseconds(Math.Min(milliseconds, MaxReceiveRetryDelay.TotalMilliseconds));
     }
 
+    /// <summary>
+    /// Turns a received datagram into a message, or reports it as not one of ours.
+    /// </summary>
+    private bool TryParseMessage(byte[] buffer, out T message)
+    {
+        message = null!;
+
+        try
+        {
+            var data = Encoding.UTF8.GetString(buffer);
+
+            var parsed = new T();
+            parsed.Deserialize(data);
+
+            message = parsed;
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "{Prefix}Dropping undecodable {Bytes}-byte datagram", _nodePrefix, buffer.Length);
+
+            return false;
+        }
+    }
+
     private async Task<int> ProcessMessageAsync(T message, CancellationToken cancellationToken)
     {
         if (!_processedMessages.TryAdd(message))
@@ -346,7 +377,25 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
         ObserveNotifiedNodes(message);
         PublishToSubscribers(message);
 
-        var forwarded = await SocializeMessageAsync(message, cancellationToken).ConfigureAwait(false);
+        int forwarded;
+
+        try
+        {
+            forwarded = await SocializeMessageAsync(message, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Subscribers already have the message; a failed forward — a discovery
+            // backend outage, an oversized payload — is this message's problem and must
+            // not bubble into the receive loop's failure backoff and stall the node.
+            _logger.LogError(ex, "{Prefix}Failed to forward message id: {Id}", _nodePrefix, message.Id);
+
+            return 0;
+        }
 
         _logger.LogDebug("{Prefix}Message id: {Id} processed and forwarded to {Count} neighbours", _nodePrefix, message.Id, forwarded);
 

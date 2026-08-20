@@ -333,6 +333,69 @@ public class GossNetNodeTests
         Assert.AreEqual("still-working", received.Message.Data);
     }
 
+    [TestMethod]
+    public async Task MalformedDatagrams_DoNotTriggerTheFailureBackoff()
+    {
+        using var subscription = _node.Subscribe();
+
+        _node.Start();
+
+        // A stream of junk used to count as consecutive loop failures, so ten of
+        // these accumulated over twenty seconds of exponential backoff before the
+        // real message behind them was even received — a trivially cheap way for
+        // stray traffic to stall a node.
+        for (var i = 0; i < 10; i++)
+        {
+            _udpClient.EnqueueReceive("junk"u8.ToArray());
+        }
+
+        _udpClient.EnqueueReceive(Datagram(new TestMessage { Data = "behind-the-junk" }));
+
+        var sw = Stopwatch.StartNew();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var received = await subscription.Reader.ReadAsync(cts.Token);
+        sw.Stop();
+
+        Assert.AreEqual("behind-the-junk", received.Message.Data);
+        Assert.IsTrue(sw.ElapsedMilliseconds < 3000,
+            $"junk datagrams delayed a real message by {sw.ElapsedMilliseconds}ms; they must be dropped without backoff");
+    }
+
+    [TestMethod]
+    public async Task DiscoveryFailure_WhileForwarding_DoesNotStallTheReceiveLoop()
+    {
+        var configuration = new GossNetConfiguration
+        {
+            Hostname = "self",
+            Port = 9100,
+            DiscoveryProvider = new ThrowingDiscovery()
+        };
+
+        var udpClient = new MockUdpClient();
+        using var node = new GossNetNode<TestMessage>(configuration, _logger, udpClient);
+        using var subscription = node.Subscribe();
+
+        node.Start();
+        udpClient.EnqueueReceive(Datagram(new TestMessage { Data = "first" }));
+        udpClient.EnqueueReceive(Datagram(new TestMessage { Data = "second" }));
+
+        // Both messages must reach subscribers promptly even though every forward
+        // fails: a discovery outage is a fan-out problem, not a receive problem.
+        foreach (var expected in new[] { "first", "second" })
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var received = await subscription.Reader.ReadAsync(cts.Token);
+
+            Assert.AreEqual(expected, received.Message.Data);
+        }
+    }
+
+    private sealed class ThrowingDiscovery : INodeDiscovery
+    {
+        public ValueTask<IReadOnlyList<GossNetNodeHostEntry>> GetNeighboursAsync(CancellationToken cancellationToken = default) =>
+            throw new NodeDiscoveryException("backend unreachable");
+    }
+
     // ---------------------------------------------------------------------------
     // Gossip behaviour.
     // ---------------------------------------------------------------------------
