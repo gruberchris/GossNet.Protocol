@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 version is below 1.0.0, breaking changes ship in minor releases.
 
+## [0.9.0]
+
+### Added
+
+- `KubernetesNodeDiscovery` now implements `IWatchableNodeDiscovery`, so a pod joining or
+  leaving reaches a node as it happens instead of after `CacheDuration`.
+- `IWatchablePodLookup`, the opt-in seam a lookup implements to stream pod changes. Separate
+  from `IKubernetesPodLookup` rather than added to it, so existing implementations are
+  unaffected; `KubernetesPodLookup` implements both. A lookup without it leaves the node on
+  cached polling.
+- k3s integration tests covering the pod watch, alongside the existing Consul ones.
+
 ## [0.8.0]
 
 ### Added

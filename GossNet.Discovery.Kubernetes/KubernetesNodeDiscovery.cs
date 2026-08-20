@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using GossNet.Protocol;
 
 namespace GossNet.Discovery.Kubernetes;
@@ -18,7 +19,7 @@ namespace GossNet.Discovery.Kubernetes;
 /// };
 /// </code>
 /// </example>
-public sealed class KubernetesNodeDiscovery : CachingNodeDiscovery, IDisposable
+public sealed class KubernetesNodeDiscovery : CachingNodeDiscovery, IWatchableNodeDiscovery, IDisposable
 {
     private const string FallbackNamespace = "default";
 
@@ -82,6 +83,63 @@ public sealed class KubernetesNodeDiscovery : CachingNodeDiscovery, IDisposable
                 $"Failed to list pods matching '{_options.LabelSelector}' in namespace '{namespaceName}'.", ex);
         }
 
+        return ToNeighbours(pods, port);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// Watches pods in the namespace, re-listing on each change. The watch reports one pod
+    /// at a time while a neighbour list has to be complete, so the list is what gets
+    /// published; the watch only says when to look again.
+    /// </para>
+    /// <para>
+    /// Completes immediately when the lookup does not support watching, which leaves the
+    /// node on its normal cached polling.
+    /// </para>
+    /// </remarks>
+    public async IAsyncEnumerable<IReadOnlyList<GossNetNodeHostEntry>> WatchAsync(
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        if (_lookup is not IWatchablePodLookup watchable)
+        {
+            yield break;
+        }
+
+        var namespaceName = _options.Namespace ?? _lookup.CurrentNamespace ?? FallbackNamespace;
+        var port = _options.Port ?? _configuration.Port;
+
+        await foreach (var _ in watchable
+            .WatchPodsAsync(namespaceName, _options.LabelSelector, _options.FieldSelector, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            IReadOnlyList<KubernetesPodInfo> pods;
+
+            try
+            {
+                pods = await _lookup
+                    .ListPodsAsync(namespaceName, _options.LabelSelector, _options.FieldSelector, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                yield break;
+            }
+            catch (Exception)
+            {
+                // The watch signalled but the follow-up list failed. Skipping this signal
+                // keeps the last known membership rather than blanking it, and the next
+                // change will prompt another attempt.
+                continue;
+            }
+
+            yield return ToNeighbours(pods, port);
+        }
+    }
+
+    /// <summary>Maps pods to neighbours, dropping any that cannot be gossiped at.</summary>
+    private IReadOnlyList<GossNetNodeHostEntry> ToNeighbours(IReadOnlyList<KubernetesPodInfo> pods, int port)
+    {
         var candidates = new List<GossNetNodeHostEntry>(pods.Count);
 
         foreach (var pod in pods)

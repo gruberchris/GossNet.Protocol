@@ -224,7 +224,7 @@ part of the network is unreachable.
 | Docker        | Discover nodes using Docker                  |         | `GossNet.Discovery.Docker`     |
 | Google Cloud  | Discover Compute Engine instances by label   |         | `GossNet.Discovery.Gcp`        |
 | etcd          | Register under a lease, discover by prefix   | ✅      | `GossNet.Discovery.Etcd`       |
-| Kubernetes    | Discover nodes using Kubernetes              |         | `GossNet.Discovery.Kubernetes` |
+| Kubernetes    | Discover nodes using Kubernetes              | ✅      | `GossNet.Discovery.Kubernetes` |
 | Redis         | Heartbeat into a shared sorted set           |         | `GossNet.Discovery.Redis`      |
 
 > **Docker Swarm and Kubernetes headless Services need no provider.** DNS discovery already
@@ -379,8 +379,8 @@ public interface IWatchableNodeDiscovery : INodeDiscovery
 ```
 
 Nothing needs enabling. `GossNetNode.Start()` subscribes when the provider implements it and
-uses each pushed list in place of polling. `GossNet.Discovery.Etcd` and
-`GossNet.Discovery.Consul` implement it today.
+uses each pushed list in place of polling. `GossNet.Discovery.Etcd`, `GossNet.Discovery.Consul`
+and `GossNet.Discovery.Kubernetes` implement it today.
 
 Two rules for implementors:
 
