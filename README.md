@@ -201,16 +201,22 @@ even in case of partial network failures.
 
 ## Service Discovery
 
-| Method      | Description                     | Status | Package                        |
-|-------------|---------------------------------|--------|--------------------------------|
-| DNS         | Discover nodes using DNS        | Done   | built in                       |
-| Static List | Manually configure node list    | Done   | built in                       |
-| Consul      | Discover nodes using Consul     | Done   | `GossNet.Discovery.Consul`     |
-| Kubernetes  | Discover nodes using Kubernetes | Done   | `GossNet.Discovery.Kubernetes` |
-| Docker      | Discover nodes using Docker     | Done   | `GossNet.Discovery.Docker`     |
+| Method        | Description                                  | Status | Package                        |
+|---------------|----------------------------------------------|--------|--------------------------------|
+| DNS           | Discover nodes using DNS                     | Done   | built in                       |
+| Static List   | Manually configure node list                 | Done   | built in                       |
+| Peer Exchange | Learn nodes from the gossip traffic itself   | Done   | built in                       |
+| Composite     | Combine several mechanisms into one          | Done   | built in                       |
+| Consul        | Discover nodes using Consul                  | Done   | `GossNet.Discovery.Consul`     |
+| Kubernetes    | Discover nodes using Kubernetes              | Done   | `GossNet.Discovery.Kubernetes` |
+| Docker        | Discover nodes using Docker                  | Done   | `GossNet.Discovery.Docker`     |
 
-DNS and static-list discovery are built in. The other three ship as separate packages so
-their client dependencies stay out of the core package:
+> **Docker Swarm and Kubernetes headless Services need no provider.** DNS discovery already
+> covers both: Swarm's `tasks.<service>` and a headless Service's DNS name each resolve to
+> every instance's address. Point `Hostname` at that name and use `NodeDiscovery.Dns`.
+
+The first four are built in. The rest ship as separate packages so their client dependencies
+stay out of the core package:
 
 ```shell
 dotnet add package GossNet.Discovery.Consul
@@ -233,6 +239,68 @@ var configuration = new GossNetConfiguration
     DiscoveryProviderFactory = cfg => new ConsulNodeDiscovery(cfg, consulOptions)
 };
 ```
+
+### Peer exchange
+
+Every other mechanism asks something external who the peers are. This one does not have to.
+Each message already carries `NotifiedNodes` — the nodes known to have seen it — so a node
+that receives one learns the identity of everyone on that message's path. Give it a seed to
+reach the network through and the rest of the membership arrives on its own:
+
+```csharp
+var configuration = new GossNetConfiguration
+{
+    Hostname = "10.0.0.4",
+    Port = 9055,
+    NodeDiscovery = NodeDiscovery.PeerExchange,
+    // Seeds only. Everything else is learned.
+    StaticNodes = [new GossNetNodeHostEntry { Hostname = "10.0.0.1", Port = 9055 }]
+};
+```
+
+Seeds are never aged out: after a partition long enough to expire every learned peer, they
+are the only way back in. Learned peers are dropped after `PeerTimeout` without a sighting
+and capped at `MaxPeers`, evicting the least recently seen:
+
+```csharp
+DiscoveryProviderFactory = cfg => new PeerExchangeNodeDiscovery(cfg, new PeerExchangeOptions
+{
+    PeerTimeout = TimeSpan.FromMinutes(5),
+    MaxPeers = 256
+})
+```
+
+Set `PeerTimeout` comfortably longer than the interval at which your application sends
+messages, or live peers will be forgotten and re-learned in a cycle.
+
+> **Every node's `Hostname` must be reachable by the others.** A peer is learned exactly as
+> it advertises itself, so a node behind NAT, or one in a container advertising an internal
+> address, teaches its peers an address they cannot reach.
+
+Any provider can learn this way by implementing `IObservingNodeDiscovery`; the node feeds it
+each message's notified list and ignores providers that do not implement it.
+
+### Combining mechanisms
+
+`DiscoveryProvider` holds one provider, so `CompositeNodeDiscovery` exists to union several.
+The obvious use is seeds plus a registry, so a cluster can still form when the registry is
+unreachable:
+
+```csharp
+DiscoveryProviderFactory = cfg => new CompositeNodeDiscovery(
+[
+    new StaticListNodeDiscovery(cfg),
+    new ConsulNodeDiscovery(cfg, consulOptions)
+])
+```
+
+Results are unioned and de-duplicated. One provider failing is tolerated and the others are
+still used; **all** of them failing throws `NodeDiscoveryException` with every underlying
+error attached, because returning an empty list would be indistinguishable from a network
+with nobody else in it.
+
+Pass `ownsProviders: false` when the children are used elsewhere and should outlive the
+composite.
 
 ### Custom discovery
 

@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 version is below 1.0.0, breaking changes ship in minor releases.
 
+## [0.4.0]
+
+Discovery no longer has to depend on something outside the network. Purely additive — no
+existing API changed, and every existing provider keeps working untouched.
+
+### Added
+
+- `PeerExchangeNodeDiscovery` and `NodeDiscovery.PeerExchange`: seeds from `StaticNodes`,
+  then learns the rest of the membership from the `NotifiedNodes` list every message already
+  carries. Seeds are never evicted; learned peers age out after `PeerTimeout` and are capped
+  at `MaxPeers`, both settable through `PeerExchangeOptions`.
+- `IObservingNodeDiscovery`, the opt-in interface a provider implements to be fed each
+  message's notified list. Providers that do not implement it are unaffected — the node
+  resolves this once at construction, not per message.
+- `CompositeNodeDiscovery`, unioning several providers so seeds and a registry can be used
+  together. One provider failing is tolerated; all of them failing throws
+  `NodeDiscoveryException` with every underlying error attached.
+
+### Documentation
+
+- Noted that Docker Swarm and Kubernetes headless Services need no dedicated provider: DNS
+  discovery already resolves `tasks.<service>` and headless Service names to every instance.
+
 ## [0.3.0]
 
 A correctness and modernization release. Several of the fixes could not be made without
