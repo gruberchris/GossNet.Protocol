@@ -20,6 +20,13 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     private readonly ILogger<GossNetNode<T>> _logger;
     private readonly ExpiringMessageCache<T> _processedMessages;
     private readonly INodeDiscovery _discovery;
+
+    /// <summary>
+    /// Set when the discovery provider learns from traffic. Resolved once here rather than
+    /// type-checked per message, since this is on the path of every send and receive.
+    /// </summary>
+    private readonly IObservingNodeDiscovery? _observer;
+
     private readonly string _nodePrefix;
 
     /// <summary>Serializes sends, which originate from both callers and the receive loop.</summary>
@@ -51,6 +58,7 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
         // Resolved up front so a node configured for a discovery mechanism that is not
         // available fails here rather than silently gossiping to nobody.
         _discovery = GossNetDiscovery.CreateProvider(configuration);
+        _observer = _discovery as IObservingNodeDiscovery;
 
         _udpClient = udpClient ?? new UdpClientAdapter(configuration.Port);
         _udpClient.EnableBroadcast = true;
@@ -111,6 +119,7 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
 
         MarkSelfAsNotified(message);
         _processedMessages.TryAdd(message);
+        ObserveNotifiedNodes(message);
 
         var sent = await SocializeMessageAsync(message, cancellationToken).ConfigureAwait(false);
 
@@ -264,6 +273,7 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
         }
 
         MarkSelfAsNotified(message);
+        ObserveNotifiedNodes(message);
         PublishToSubscribers(message);
 
         var forwarded = await SocializeMessageAsync(message, cancellationToken).ConfigureAwait(false);
@@ -291,6 +301,31 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
         foreach (var subscriber in subscribers)
         {
             subscriber.Publish(envelope, _logger, _nodePrefix);
+        }
+    }
+
+    /// <summary>
+    /// Feeds a message's notified list to a discovery provider that learns from traffic.
+    /// </summary>
+    /// <remarks>
+    /// Wrapped because this runs on the receive loop: a provider that throws here would
+    /// otherwise be indistinguishable from a transport failure and would trip the loop's
+    /// backoff, stalling every message the node handles.
+    /// </remarks>
+    private void ObserveNotifiedNodes(T message)
+    {
+        if (_observer is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _observer.Observe(message.NotifiedNodes);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "{Prefix}Discovery provider threw while observing message id: {Id}", _nodePrefix, message.Id);
         }
     }
 

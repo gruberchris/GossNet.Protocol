@@ -34,6 +34,7 @@ internal static class GossNetDiscovery
         {
             NodeDiscovery.Dns => new DnsNodeDiscovery(configuration),
             NodeDiscovery.StaticList => new StaticListNodeDiscovery(configuration),
+            NodeDiscovery.PeerExchange => new PeerExchangeNodeDiscovery(configuration),
             NodeDiscovery.Consul => throw RequiresPackage("Consul", "GossNet.Discovery.Consul", "ConsulNodeDiscovery"),
             NodeDiscovery.Kubernetes => throw RequiresPackage("Kubernetes", "GossNet.Discovery.Kubernetes", "KubernetesNodeDiscovery"),
             NodeDiscovery.Docker => throw RequiresPackage("Docker", "GossNet.Discovery.Docker", "DockerNodeDiscovery"),

@@ -18,7 +18,13 @@ public enum NodeDiscovery
     Docker,
 
     /// <summary>Use the explicitly configured <see cref="GossNetConfiguration.StaticNodes"/>.</summary>
-    StaticList
+    StaticList,
+
+    /// <summary>
+    /// Start from <see cref="GossNetConfiguration.StaticNodes"/> as seeds and learn the rest
+    /// of the network from the messages themselves.
+    /// </summary>
+    PeerExchange
 }
 
 /// <summary>
