@@ -137,16 +137,9 @@ public sealed class MulticastNodeDiscovery : INodeDiscovery, IDisposable
             return false;
         }
 
-        string text;
-
-        try
-        {
-            text = Encoding.UTF8.GetString(datagram);
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
+        // GetString never throws for invalid sequences — it substitutes U+FFFD, which
+        // simply fails the protocol match below.
+        var text = Encoding.UTF8.GetString(datagram);
 
         var parts = text.Split(' ');
 

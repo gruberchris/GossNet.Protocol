@@ -12,11 +12,19 @@ namespace GossNet.Protocol;
 /// Default <see cref="IUdpClient"/> implementation, backed by <see cref="UdpClient"/>.
 /// </summary>
 /// <remarks>
+/// <para>
+/// The socket is dual-mode where the host supports it, so neighbours advertised by
+/// IPv6 addresses — which DNS discovery legitimately produces — are reachable. Hosts
+/// with IPv6 disabled fall back to an IPv4-only socket, which is what this adapter
+/// always was before.
+/// </para>
+/// <para>
 /// Destination hostnames are resolved through a short-lived cache: the UdpClient
 /// hostname overloads resolve DNS on every call, which on the send path meant one
 /// lookup per neighbour per message. IP literals bypass resolution entirely.
+/// </para>
 /// </remarks>
-public sealed class UdpClientAdapter(int port) : IUdpClient
+public sealed class UdpClientAdapter : IUdpClient
 {
     /// <summary>
     /// How long a resolved address is reused. Matches the discovery providers' default
@@ -24,7 +32,30 @@ public sealed class UdpClientAdapter(int port) : IUdpClient
     /// </summary>
     private static readonly TimeSpan ResolutionLifetime = TimeSpan.FromSeconds(30);
 
-    private readonly UdpClient _client = new(port);
+    private readonly UdpClient _client;
+
+    /// <summary>Binds the gossip socket.</summary>
+    /// <param name="port">The UDP port to listen on.</param>
+    public UdpClientAdapter(int port) => _client = CreateClient(port);
+
+    private static UdpClient CreateClient(int port)
+    {
+        try
+        {
+            // DualMode must be set before the bind, which rules out the binding
+            // UdpClient constructors.
+            var client = new UdpClient(AddressFamily.InterNetworkV6);
+            client.Client.DualMode = true;
+            client.Client.Bind(new IPEndPoint(IPAddress.IPv6Any, port));
+
+            return client;
+        }
+        catch (Exception ex) when (ex is SocketException or NotSupportedException)
+        {
+            // No IPv6 on this host.
+            return new UdpClient(port);
+        }
+    }
 
     private readonly ConcurrentDictionary<string, (IPAddress Address, long ResolvedAt)> _resolved =
         new(StringComparer.OrdinalIgnoreCase);

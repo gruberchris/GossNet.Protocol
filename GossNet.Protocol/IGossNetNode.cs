@@ -27,6 +27,14 @@ public interface IGossNetNode<T> : IDisposable, IAsyncDisposable where T : GossN
     /// <param name="message">The message to send.</param>
     /// <param name="cancellationToken">Cancels the send.</param>
     /// <returns>The number of neighbours the message was successfully sent to.</returns>
+    /// <remarks>
+    /// The message instance is mutated: this node (and, with
+    /// <see cref="GossNetConfiguration.AddRecipientsToNotifiedNodes"/>, the recipients)
+    /// are appended to <see cref="GossNetMessageBase.NotifiedNodes"/>, and its id is
+    /// recorded in the de-duplication cache — so a copy of the message arriving back
+    /// over the network is discarded rather than re-delivered to this node's own
+    /// subscribers.
+    /// </remarks>
     Task<int> SendAsync(T message, CancellationToken cancellationToken = default);
 
     /// <summary>

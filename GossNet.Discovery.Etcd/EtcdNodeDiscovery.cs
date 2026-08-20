@@ -44,7 +44,15 @@ public sealed class EtcdNodeDiscovery : CachingNodeDiscovery, IWatchableNodeDisc
     private readonly CancellationTokenSource _cancellation = new();
 
     private int _disposed;
-    private int _registered;
+
+    /// <summary>Guards <see cref="_registration"/>.</summary>
+    private readonly object _registrationGate = new();
+
+    /// <summary>
+    /// The in-flight or completed registration, shared by every caller so none proceeds
+    /// while it is still being established. Cleared on failure so the next call retries.
+    /// </summary>
+    private Task? _registration;
 
     /// <summary>
     /// Initializes etcd-based discovery.
@@ -190,13 +198,25 @@ public sealed class EtcdNodeDiscovery : CachingNodeDiscovery, IWatchableNodeDisc
     /// lookup must not tear down this node's lease and evict it from the cluster.
     /// </para>
     /// </remarks>
-    private async ValueTask EnsureRegisteredAsync()
+    private Task EnsureRegisteredAsync()
     {
-        if (Interlocked.CompareExchange(ref _registered, 1, 0) != 0)
+        lock (_registrationGate)
         {
-            return;
-        }
+            // Concurrent callers share the one in-flight registration rather than one
+            // proceeding unregistered while another is still establishing it. A failed
+            // attempt is replaced on the next call, so etcd being briefly unavailable
+            // at startup does not leave the node permanently unregistered.
+            if (_registration is null || _registration.IsFaulted || _registration.IsCanceled)
+            {
+                _registration = RegisterAsync();
+            }
 
+            return _registration;
+        }
+    }
+
+    private async Task RegisterAsync()
+    {
         try
         {
             await _registry
@@ -207,10 +227,6 @@ public sealed class EtcdNodeDiscovery : CachingNodeDiscovery, IWatchableNodeDisc
         }
         catch (Exception ex)
         {
-            // Allow a later call to try again rather than leaving the node permanently
-            // unregistered because etcd was briefly unavailable at startup.
-            Interlocked.Exchange(ref _registered, 0);
-
             throw new NodeDiscoveryException($"Failed to register {_member} in etcd at '{MemberKey}'.", ex);
         }
     }
