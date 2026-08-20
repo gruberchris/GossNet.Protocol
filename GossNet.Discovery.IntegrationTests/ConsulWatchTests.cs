@@ -17,8 +17,6 @@ namespace GossNet.Discovery.IntegrationTests;
 [TestClass]
 public sealed class ConsulWatchTests
 {
-    private const string ServiceName = "gossnet";
-
     private static ConsulContainer? _consul;
     private static string? _skipReason;
 
@@ -50,6 +48,18 @@ public sealed class ConsulWatchTests
 
     private static Uri AgentAddress => new(_consul!.GetBaseAddress());
 
+    /// <summary>
+    /// A service name unique to each test. Consul's index moves whenever any instance of a
+    /// service changes, so sharing one name would let a leftover registration from another
+    /// test wake this one's blocking query and break its update counts.
+    /// </summary>
+    private string ServiceName => $"gossnet-{TestContext.TestName!.ToLowerInvariant()}";
+
+    /// <summary>Registrations made by the running test, deregistered whatever the outcome.</summary>
+    private readonly List<string> _registered = [];
+
+    public TestContext TestContext { get; set; } = null!;
+
     [TestInitialize]
     public void SkipWithoutDocker()
     {
@@ -59,7 +69,36 @@ public sealed class ConsulWatchTests
         }
     }
 
-    private static ConsulNodeDiscovery Discovery(string selfHost = "10.0.0.1", int selfPort = 9055) =>
+    /// <summary>
+    /// Cleans up regardless of outcome. Deregistering on the success path only meant one
+    /// failing test leaked its instances into everything that ran after it.
+    /// </summary>
+    [TestCleanup]
+    public async Task DeregisterEverythingAsync()
+    {
+        if (_consul is null)
+        {
+            return;
+        }
+
+        foreach (var id in _registered)
+        {
+            try
+            {
+                using var client = new ConsulClient(configuration => configuration.Address = AgentAddress);
+
+                await client.Agent.ServiceDeregister(id).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Best effort: the agent is torn down with the container anyway.
+            }
+        }
+
+        _registered.Clear();
+    }
+
+    private ConsulNodeDiscovery Discovery(string selfHost = "10.0.0.1", int selfPort = 9055) =>
         new(
             new GossNetConfiguration { Hostname = selfHost, Port = selfPort },
             new ConsulDiscoveryOptions
@@ -71,9 +110,11 @@ public sealed class ConsulWatchTests
                 WatchRetryDelay = TimeSpan.FromMilliseconds(200)
             });
 
-    private static async Task RegisterAsync(string id, string address, int port)
+    private async Task RegisterAsync(string id, string address, int port)
     {
         using var client = new ConsulClient(configuration => configuration.Address = AgentAddress);
+
+        _registered.Add(id);
 
         await client.Agent.ServiceRegister(new AgentServiceRegistration
         {
@@ -84,9 +125,11 @@ public sealed class ConsulWatchTests
         }).ConfigureAwait(false);
     }
 
-    private static async Task DeregisterAsync(string id)
+    private async Task DeregisterAsync(string id)
     {
         using var client = new ConsulClient(configuration => configuration.Address = AgentAddress);
+
+        _registered.Remove(id);
 
         await client.Agent.ServiceDeregister(id).ConfigureAwait(false);
     }
@@ -155,7 +198,6 @@ public sealed class ConsulWatchTests
 
         CollectionAssert.Contains(neighbours.Select(n => n.ToString()).ToArray(), "10.0.0.2:9055");
 
-        await DeregisterAsync("poll-a");
     }
 
     /// <summary>
@@ -196,8 +238,6 @@ public sealed class ConsulWatchTests
         await cts.CancelAsync();
         await reader;
 
-        await DeregisterAsync("watch-a");
-        await DeregisterAsync("watch-b");
     }
 
     [TestMethod]
@@ -228,7 +268,6 @@ public sealed class ConsulWatchTests
         await cts.CancelAsync();
         await reader;
 
-        await DeregisterAsync("drop-a");
     }
 
     /// <summary>
@@ -255,7 +294,6 @@ public sealed class ConsulWatchTests
         await cts.CancelAsync();
         await reader;
 
-        await DeregisterAsync("quiet-a");
     }
 
     [TestMethod]
@@ -282,8 +320,6 @@ public sealed class ConsulWatchTests
         await cts.CancelAsync();
         await reader;
 
-        await DeregisterAsync("self");
-        await DeregisterAsync("other");
     }
 
     [TestMethod]

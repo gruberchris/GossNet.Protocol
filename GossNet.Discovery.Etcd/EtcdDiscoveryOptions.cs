@@ -24,8 +24,9 @@ public sealed class EtcdDiscoveryOptions
 
     /// <summary>Gets how long a resolved member list is reused. Defaults to five seconds.</summary>
     /// <remarks>
-    /// Only consulted when the watch is not running. With <see cref="IWatchableNodeDiscovery"/>
-    /// active, membership arrives as it changes and this is not on the path.
+    /// Only consulted when the watch is not running. With
+    /// <see cref="GossNet.Protocol.IWatchableNodeDiscovery"/> active, membership arrives as
+    /// it changes and this is not on the path.
     /// </remarks>
     public TimeSpan? CacheDuration { get; init; } = TimeSpan.FromSeconds(5);
 

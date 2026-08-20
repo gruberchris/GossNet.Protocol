@@ -24,9 +24,10 @@ version is below 1.0.0, breaking changes ship in minor releases.
 
 ### Changed
 
-- PR validation now also runs on direct pushes to `main`, not only on pull requests. Branch
-  protection can be bypassed by an admin, and without this the only check between such a
-  push and a publish was the release job itself.
+- The release workflow now verifies package contents — every expected framework asset is
+  present, and no provider dependency has leaked into the core package — before pushing to
+  nuget.org. That check previously ran only in PR validation, so nothing stood between a
+  broken package and a publish that cannot be undone.
 
 ## [0.7.0]
 

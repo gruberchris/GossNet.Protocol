@@ -4,11 +4,11 @@ on:
   pull_request:
     branches: [ main ]
 
-  # Also on direct pushes to main. Branch protection can be bypassed by an admin, and
-  # without this the only thing standing between such a push and a publish is the release
-  # job itself.
-  push:
-    branches: [ main ]
+  # Deliberately not `push: [main]`. release.yml already runs Build, Test and Pack before it
+  # publishes, so a merge is validated either way; adding a push trigger here would only run
+  # the same work — including the Consul container — a second time, concurrently with the
+  # release. The one check release.yml used to be missing, package contents, now lives there
+  # too.
 
 jobs:
   validate:
