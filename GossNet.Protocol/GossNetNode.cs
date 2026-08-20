@@ -13,6 +13,8 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
 {
     private static readonly TimeSpan MinReceiveRetryDelay = TimeSpan.FromMilliseconds(50);
     private static readonly TimeSpan MaxReceiveRetryDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan MinWatchRetryDelay = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan MaxWatchRetryDelay = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan DisposeStopTimeout = TimeSpan.FromSeconds(5);
 
     private readonly GossNetConfiguration _configuration;
@@ -174,34 +176,84 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
     /// Keeps <see cref="_watchedNeighbours"/> current from a provider that pushes changes.
     /// </summary>
     /// <remarks>
-    /// A watch is an optimization, never a requirement. If the backend's change feed fails,
-    /// the snapshot is dropped and the node returns to asking the provider per message —
-    /// slower to notice membership changes, but still correct. Taking the node down because
-    /// a watch broke would be strictly worse than polling.
+    /// <para>
+    /// A watch is an optimization, never a requirement. While the backend's change feed is
+    /// down, the snapshot is dropped and the node returns to asking the provider per
+    /// message — slower to notice membership changes, but still correct. Taking the node
+    /// down because a watch broke would be strictly worse than polling.
+    /// </para>
+    /// <para>
+    /// A watch that ends is re-established with backoff rather than abandoned: some
+    /// backends surface a dropped connection by simply ending the stream, and a single
+    /// blip must not downgrade the node to polling for the rest of its life. The one
+    /// exception is a watch that ends cleanly without ever yielding — that is how a
+    /// provider signals its backend cannot watch at all, and retrying it would spin.
+    /// </para>
     /// </remarks>
     private async Task WatchLoopAsync(IWatchableNodeDiscovery watchable, CancellationToken cancellationToken)
     {
+        var consecutiveFailures = 0;
+
         try
         {
-            await foreach (var neighbours in watchable.WatchAsync(cancellationToken).ConfigureAwait(false))
+            while (!cancellationToken.IsCancellationRequested)
             {
-                _watchedNeighbours = neighbours;
+                var yielded = false;
 
-                _logger.LogDebug("{Prefix}Discovery watch reported {Count} neighbours", _nodePrefix, neighbours.Count);
+                try
+                {
+                    await foreach (var neighbours in watchable.WatchAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        yielded = true;
+                        consecutiveFailures = 0;
+                        _watchedNeighbours = neighbours;
+
+                        _logger.LogDebug("{Prefix}Discovery watch reported {Count} neighbours", _nodePrefix, neighbours.Count);
+                    }
+
+                    if (!yielded)
+                    {
+                        _logger.LogDebug("{Prefix}Discovery provider does not support watching; using cached polling", _nodePrefix);
+                        return;
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "{Prefix}Discovery watch failed; polling until it is re-established", _nodePrefix);
+                }
+
+                // Poll while the watch is down: membership a dead watch left behind
+                // only gets staler.
+                _watchedNeighbours = null;
+
+                consecutiveFailures++;
+
+                try
+                {
+                    await Task.Delay(GetWatchRetryDelay(consecutiveFailures), cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
             }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            // Shutdown.
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "{Prefix}Discovery watch failed; falling back to polling", _nodePrefix);
         }
         finally
         {
             _watchedNeighbours = null;
         }
+    }
+
+    private static TimeSpan GetWatchRetryDelay(int consecutiveFailures)
+    {
+        var exponent = Math.Min(consecutiveFailures - 1, 5);
+        var seconds = MinWatchRetryDelay.TotalSeconds * Math.Pow(2, exponent);
+
+        return TimeSpan.FromSeconds(Math.Min(seconds, MaxWatchRetryDelay.TotalSeconds));
     }
 
     /// <inheritdoc />

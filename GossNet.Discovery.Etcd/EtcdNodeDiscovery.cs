@@ -70,7 +70,7 @@ public sealed class EtcdNodeDiscovery : CachingNodeDiscovery, IWatchableNodeDisc
         _logger = logger ?? NullLogger.Instance;
 
         _ownsRegistry = registry is null;
-        _registry = registry ?? new EtcdRegistry(options);
+        _registry = registry ?? new EtcdRegistry(options, _logger);
 
         _member = $"{configuration.Hostname}:{configuration.Port.ToString(CultureInfo.InvariantCulture)}";
     }

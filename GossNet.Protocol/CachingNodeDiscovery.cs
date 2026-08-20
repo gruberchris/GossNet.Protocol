@@ -55,6 +55,8 @@ public abstract class CachingNodeDiscovery : INodeDiscovery
     /// <inheritdoc />
     public async ValueTask<IReadOnlyList<GossNetNodeHostEntry>> GetNeighboursAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (TryGetFresh(out var cached))
         {
             return cached;

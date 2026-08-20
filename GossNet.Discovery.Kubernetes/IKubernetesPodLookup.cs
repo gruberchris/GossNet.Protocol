@@ -149,7 +149,14 @@ public sealed class KubernetesPodLookup : IKubernetesPodLookup, IWatchablePodLoo
         string? fieldSelector,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var changes = Channel.CreateUnbounded<bool>();
+        // Capacity one with DropWrite coalesces bursts: a rolling deploy raises one
+        // event per pod transition, and each signal costs the consumer a full re-list.
+        // While one re-list is in flight, any number of further events collapse into
+        // a single pending signal.
+        var changes = Channel.CreateBounded<bool>(new BoundedChannelOptions(1)
+        {
+            FullMode = BoundedChannelFullMode.DropWrite
+        });
 
         // The client's watch is callback-shaped; a channel turns it into the pull-based
         // sequence IWatchableNodeDiscovery expects.

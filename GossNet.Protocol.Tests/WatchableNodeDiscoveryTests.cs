@@ -243,4 +243,108 @@ public sealed class WatchableNodeDiscoveryTests
 
         Assert.IsTrue(await WaitForAsync(() => discovery.WatchSubscriptions == 2));
     }
+
+    /// <summary>
+    /// A watch whose first subscription yields once then breaks; later subscriptions work.
+    /// Mimics a backend surfacing a dropped connection by ending the stream.
+    /// </summary>
+    private sealed class FlakyWatchingDiscovery : IWatchableNodeDiscovery
+    {
+        private readonly Channel<IReadOnlyList<GossNetNodeHostEntry>> _recovered =
+            Channel.CreateUnbounded<IReadOnlyList<GossNetNodeHostEntry>>();
+
+        private int _subscriptions;
+
+        public int WatchSubscriptions => Volatile.Read(ref _subscriptions);
+
+        public void PushAfterRecovery(params GossNetNodeHostEntry[] neighbours) => _recovered.Writer.TryWrite(neighbours);
+
+        public ValueTask<IReadOnlyList<GossNetNodeHostEntry>> GetNeighboursAsync(CancellationToken cancellationToken = default) =>
+            new((IReadOnlyList<GossNetNodeHostEntry>)[Polled]);
+
+        public async IAsyncEnumerable<IReadOnlyList<GossNetNodeHostEntry>> WatchAsync(
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref _subscriptions) == 1)
+            {
+                yield return [Watched];
+
+                throw new InvalidOperationException("connection dropped");
+            }
+
+            await foreach (var update in _recovered.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                yield return update;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A single dropped connection used to downgrade the node to cached polling for the
+    /// rest of its life; the watch must be re-established instead.
+    /// </summary>
+    [TestMethod]
+    public async Task BrokenWatch_IsReestablishedWithBackoff()
+    {
+        var discovery = new FlakyWatchingDiscovery();
+        var udpClient = new MockUdpClient();
+        await using var node = new GossNetNode<TestMessage>(Configuration(discovery), udpClient: udpClient);
+
+        node.Start();
+
+        // The retry backoff starts at one second, so allow a few.
+        Assert.IsTrue(await WaitForAsync(() => discovery.WatchSubscriptions >= 2, 5000),
+            "the node must re-subscribe after the watch breaks");
+
+        discovery.PushAfterRecovery(new GossNetNodeHostEntry { Hostname = "recovered", Port = 9104 });
+        await WaitForAsync(() => false, 200);
+
+        await node.SendAsync(new TestMessage { Data = "hello" });
+
+        CollectionAssert.AreEqual(
+            new[] { "recovered" },
+            udpClient.SentPackets.Select(packet => packet.Hostname).ToArray(),
+            "membership pushed by the re-established watch must be used");
+    }
+
+    /// <summary>A watch that ends cleanly without yielding: the provider saying "cannot watch".</summary>
+    private sealed class WatchlessDiscovery : IWatchableNodeDiscovery
+    {
+        private int _subscriptions;
+
+        public int WatchSubscriptions => Volatile.Read(ref _subscriptions);
+
+        public ValueTask<IReadOnlyList<GossNetNodeHostEntry>> GetNeighboursAsync(CancellationToken cancellationToken = default) =>
+            new((IReadOnlyList<GossNetNodeHostEntry>)[Polled]);
+
+#pragma warning disable CS1998 // The empty sequence has nothing to await.
+        public async IAsyncEnumerable<IReadOnlyList<GossNetNodeHostEntry>> WatchAsync(
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _subscriptions);
+            yield break;
+        }
+#pragma warning restore CS1998
+    }
+
+    [TestMethod]
+    public async Task WatchThatNeverYields_IsNotRetried()
+    {
+        var discovery = new WatchlessDiscovery();
+        var udpClient = new MockUdpClient();
+        await using var node = new GossNetNode<TestMessage>(Configuration(discovery), udpClient: udpClient);
+
+        node.Start();
+
+        Assert.IsTrue(await WaitForAsync(() => discovery.WatchSubscriptions == 1));
+
+        // Outlast the first retry window: a clean zero-yield completion means the
+        // backend cannot watch, and hammering it with resubscriptions would spin.
+        await WaitForAsync(() => false, 1500);
+
+        Assert.AreEqual(1, discovery.WatchSubscriptions, "an unsupported watch must not be retried");
+
+        await node.SendAsync(new TestMessage { Data = "hello" });
+        CollectionAssert.AreEqual(new[] { "polled" }, udpClient.SentPackets.Select(packet => packet.Hostname).ToArray());
+    }
 }
