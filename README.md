@@ -201,17 +201,20 @@ even in case of partial network failures.
 
 ## Service Discovery
 
-| Method        | Description                                  | Status | Package                        |
-|---------------|----------------------------------------------|--------|--------------------------------|
-| DNS           | Discover nodes using DNS                     | Done   | built in                       |
-| Static List   | Manually configure node list                 | Done   | built in                       |
-| Peer Exchange | Learn nodes from the gossip traffic itself   | Done   | built in                       |
-| Multicast     | Announce on a multicast group, LAN only      | Done   | built in                       |
-| Composite     | Combine several mechanisms into one          | Done   | built in                       |
-| AWS EC2       | Discover instances by tag                    | Done   | `GossNet.Discovery.Aws`        |
-| Consul        | Discover nodes using Consul                  | Done   | `GossNet.Discovery.Consul`     |
-| Kubernetes    | Discover nodes using Kubernetes              | Done   | `GossNet.Discovery.Kubernetes` |
-| Docker        | Discover nodes using Docker                  | Done   | `GossNet.Discovery.Docker`     |
+| Method        | Description                                  | Watches | Package                        |
+|---------------|----------------------------------------------|---------|--------------------------------|
+| DNS           | Discover nodes using DNS                     |         | built in                       |
+| Static List   | Manually configure node list                 |         | built in                       |
+| Peer Exchange | Learn nodes from the gossip traffic itself   |         | built in                       |
+| Multicast     | Announce on a multicast group, LAN only      |         | built in                       |
+| Composite     | Combine several mechanisms into one          |         | built in                       |
+| AWS EC2       | Discover instances by tag                    |         | `GossNet.Discovery.Aws`        |
+| Azure         | Discover virtual machines by tag             |         | `GossNet.Discovery.Azure`      |
+| Consul        | Discover nodes using Consul                  |         | `GossNet.Discovery.Consul`     |
+| Docker        | Discover nodes using Docker                  |         | `GossNet.Discovery.Docker`     |
+| etcd          | Register under a lease, discover by prefix   | ✅      | `GossNet.Discovery.Etcd`       |
+| Kubernetes    | Discover nodes using Kubernetes              |         | `GossNet.Discovery.Kubernetes` |
+| Redis         | Heartbeat into a shared sorted set           |         | `GossNet.Discovery.Redis`      |
 
 > **Docker Swarm and Kubernetes headless Services need no provider.** DNS discovery already
 > covers both: Swarm's `tasks.<service>` and a headless Service's DNS name each resolve to
@@ -222,10 +225,17 @@ stay out of the core package:
 
 ```shell
 dotnet add package GossNet.Discovery.Aws
+dotnet add package GossNet.Discovery.Azure
 dotnet add package GossNet.Discovery.Consul
-dotnet add package GossNet.Discovery.Kubernetes
 dotnet add package GossNet.Discovery.Docker
+dotnet add package GossNet.Discovery.Etcd
+dotnet add package GossNet.Discovery.Kubernetes
+dotnet add package GossNet.Discovery.Redis
 ```
+
+`GossNet.Discovery.Kubernetes` and `GossNet.Discovery.Etcd` target `net8.0` and `net10.0`
+only — neither `KubernetesClient` nor `dotnet-etcd` ships a `netstandard2.0` asset. Every
+other package matches the core library's full framework set.
 
 Each provider package has its own README with configuration and deployment details.
 Selecting a mechanism whose provider has not been supplied throws at construction rather
@@ -342,6 +352,32 @@ with nobody else in it.
 
 Pass `ownsProviders: false` when the children are used elsewhere and should outlive the
 composite.
+
+### Watching for changes
+
+`INodeDiscovery` is pull-based and remote-backed providers cache, so a node joining or
+leaving takes up to `CacheDuration` to be noticed. Backends with a change feed can do better,
+and `IWatchableNodeDiscovery` is how they say so:
+
+```csharp
+public interface IWatchableNodeDiscovery : INodeDiscovery
+{
+    IAsyncEnumerable<IReadOnlyList<GossNetNodeHostEntry>> WatchAsync(CancellationToken ct);
+}
+```
+
+Nothing needs enabling. `GossNetNode.Start()` subscribes when the provider implements it and
+uses each pushed list in place of polling. `GossNet.Discovery.Etcd` implements it today.
+
+Two rules for implementors:
+
+- **Yield complete lists, not deltas.** The node replaces its whole view with each one, so a
+  partial list silently shrinks the cluster.
+- **Yield the current membership on subscription**, before waiting for a change, or a node has
+  no neighbours until something happens to join or leave.
+
+A watch is an optimization, never a requirement. If it faults, the node logs it, drops the
+pushed view and returns to polling — slower to notice changes, still correct.
 
 ### Custom discovery
 

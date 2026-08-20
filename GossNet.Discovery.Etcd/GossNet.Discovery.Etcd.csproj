@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <!--
+          Narrower than every other package in this repo, and deliberately so: dotnet-etcd 9
+          ships net8.0, net9.0 and net10.0 assets only, with no netstandard2.0. There is no
+          way to offer .NET Framework support without dropping the client or pinning an
+          ancient version of it, so the reduced set is documented in the package README
+          instead. GossNet.Discovery.Kubernetes is narrowed for the same reason.
+        -->
+        <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <None Include="README.md" Pack="true" PackagePath="\"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="dotnet-etcd"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\GossNet.Protocol\GossNet.Protocol.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="GossNet.Discovery.Tests"/>
+    </ItemGroup>
+
+    <PropertyGroup>
+        <PackageId>GossNet.Discovery.Etcd</PackageId>
+        <Authors>Chris Gruber</Authors>
+        <Description>etcd-based node discovery for GossNet.Protocol, with watch support.</Description>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <PackageProjectUrl>https://github.com/gruberchris/GossNet.Protocol</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/gruberchris/GossNet.Protocol</RepositoryUrl>
+        <PackageTags>gossip;network;protocol;etcd;service-discovery</PackageTags>
+    </PropertyGroup>
+</Project>

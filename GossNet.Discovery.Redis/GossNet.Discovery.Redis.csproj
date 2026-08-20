@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <!-- StackExchange.Redis ships netstandard2.0 alongside its modern targets, so this
+             provider covers the same frameworks as GossNet.Protocol itself. -->
+        <TargetFrameworks>netstandard2.0;net8.0;net10.0</TargetFrameworks>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <None Include="README.md" Pack="true" PackagePath="\"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="StackExchange.Redis"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\GossNet.Protocol\GossNet.Protocol.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="GossNet.Discovery.Tests"/>
+    </ItemGroup>
+
+    <PropertyGroup>
+        <PackageId>GossNet.Discovery.Redis</PackageId>
+        <Authors>Chris Gruber</Authors>
+        <Description>Redis-based node discovery for GossNet.Protocol.</Description>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <PackageProjectUrl>https://github.com/gruberchris/GossNet.Protocol</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/gruberchris/GossNet.Protocol</RepositoryUrl>
+        <PackageTags>gossip;network;protocol;redis;service-discovery</PackageTags>
+    </PropertyGroup>
+</Project>
