@@ -36,7 +36,27 @@ public sealed class UdpClientAdapter : IUdpClient
 
     /// <summary>Binds the gossip socket.</summary>
     /// <param name="port">The UDP port to listen on.</param>
-    public UdpClientAdapter(int port) => _client = CreateClient(port);
+    /// <param name="receiveBufferSize">
+    /// Socket receive buffer size in bytes, or null for the OS default. A burst of
+    /// datagrams arriving faster than the node processes them queues here; overflow is
+    /// silently dropped by the OS, so bursty workloads benefit from a larger buffer.
+    /// The OS may round or cap the value, and some systems reject values above their
+    /// limit, which surfaces as a <see cref="SocketException"/>.
+    /// </param>
+    public UdpClientAdapter(int port, int? receiveBufferSize = null)
+    {
+        _client = CreateClient(port);
+
+        if (receiveBufferSize is { } size)
+        {
+            _client.Client.ReceiveBufferSize = size;
+        }
+    }
+
+    /// <summary>
+    /// Gets the socket's actual receive buffer size in bytes, after any OS rounding.
+    /// </summary>
+    public int ReceiveBufferSize => _client.Client.ReceiveBufferSize;
 
     private static UdpClient CreateClient(int port)
     {

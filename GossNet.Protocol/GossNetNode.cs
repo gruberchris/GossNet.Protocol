@@ -89,7 +89,7 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
         (_discovery, _ownsDiscovery) = GossNetDiscovery.CreateProvider(configuration);
         _observer = _discovery as IObservingNodeDiscovery;
 
-        _udpClient = udpClient ?? new UdpClientAdapter(configuration.Port);
+        _udpClient = udpClient ?? new UdpClientAdapter(configuration.Port, configuration.ReceiveBufferSize);
         _udpClient.EnableBroadcast = true;
         _logger = logger ?? NullLogger<GossNetNode<T>>.Instance;
         _nodePrefix = $"[{configuration.Hostname}:{configuration.Port}] ";
@@ -826,7 +826,11 @@ public class GossNetNode<T> : IGossNetNode<T> where T : GossNetMessageBase, new(
                 // receive loop: a slow consumer degrades only itself.
                 FullMode = BoundedChannelFullMode.DropOldest,
                 SingleReader = false,
-                SingleWriter = true
+
+                // Publish comes from the receive loop alone, but Complete — also a
+                // writer operation — can race it from a disposing subscriber, so the
+                // single-writer promise cannot honestly be made.
+                SingleWriter = false
             });
 
         private int _disposed;

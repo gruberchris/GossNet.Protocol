@@ -44,6 +44,26 @@ public class GossNetConfiguration
     /// <summary>Gets the UDP port this node listens on. Defaults to 9055.</summary>
     public int Port { get; init; } = 9055;
 
+    /// <summary>
+    /// Gets the socket receive buffer size in bytes, or null for the OS default.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Datagrams queue in this buffer between arriving and the node reading them; the
+    /// node processes one at a time, so a burst that outruns processing overflows the
+    /// buffer and the excess is silently dropped by the OS. Gossip tolerates loss by
+    /// design — other nodes re-deliver — but bursty workloads recover faster with a
+    /// larger buffer. OS defaults vary widely (for example, less than 1&#160;MB on macOS).
+    /// </para>
+    /// <para>
+    /// The OS may round the value or cap it at a system-wide limit, and some systems
+    /// reject values above that limit outright, which surfaces as a
+    /// <see cref="System.Net.Sockets.SocketException"/> when the node is constructed.
+    /// Ignored when a custom transport is supplied to the node.
+    /// </para>
+    /// </remarks>
+    public int? ReceiveBufferSize { get; init; }
+
     /// <summary>Gets the neighbour discovery mechanism.</summary>
     /// <remarks>Ignored when <see cref="DiscoveryProvider"/> is set.</remarks>
     public NodeDiscovery NodeDiscovery { get; init; }

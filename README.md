@@ -224,6 +224,12 @@ Nodes are built to keep gossiping through infrastructure trouble:
   backoff, polling in the meantime; the etcd provider also re-registers itself if its
   lease is lost.
 
+Datagrams queue in the OS socket buffer between arriving and being processed, and a burst
+that outruns processing overflows it — the OS silently drops the excess. Gossip tolerates
+loss by design (other nodes re-deliver), but if your workload is bursty, raise
+`GossNetConfiguration.ReceiveBufferSize` above the OS default, which is under 1&nbsp;MB on
+some systems.
+
 ## Message size
 
 Messages travel in a single UDP datagram, so a serialized message must fit within

@@ -27,6 +27,11 @@ existing behavior.
   targets in the notified list before sending so recipients do not echo the message to
   each other, cutting redundant traffic in densely connected clusters at some cost in
   loss robustness.
+- `GossNetConfiguration.ReceiveBufferSize`: sizes the socket receive buffer, where
+  datagrams queue between arriving and being processed. Bursts that outrun processing
+  overflow the OS default (under 1 MB on some systems) and the excess is silently
+  dropped; gossip tolerates the loss, but bursty workloads recover faster with a
+  larger buffer.
 
 ### Fixed
 
