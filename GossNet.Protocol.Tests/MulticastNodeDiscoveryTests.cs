@@ -32,6 +32,18 @@ public sealed class MulticastNodeDiscoveryTests
             }
         }
 
+        /// <summary>Raw sent datagrams, for asserting binary frames a string would mangle.</summary>
+        public IReadOnlyList<byte[]> SentRaw
+        {
+            get
+            {
+                lock (_sent)
+                {
+                    return [.. _sent];
+                }
+            }
+        }
+
         public void Deliver(string payload) => _incoming.Writer.TryWrite(Encoding.UTF8.GetBytes(payload));
 
         public void Deliver(byte[] payload) => _incoming.Writer.TryWrite(payload);
@@ -302,6 +314,77 @@ public sealed class MulticastNodeDiscoveryTests
 
         await Assert.ThrowsExactlyAsync<OperationCanceledException>(
             async () => await discovery.GetNeighboursAsync(cts.Token));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Authentication.
+    // ---------------------------------------------------------------------------
+
+    private static readonly byte[] ClusterKey = Encoding.UTF8.GetBytes("cluster-shared-key-0123456789");
+
+    private static GossNetConfiguration AuthenticatedConfiguration(string hostname = "10.0.0.1", int port = 9055) => new()
+    {
+        Hostname = hostname,
+        Port = port,
+        DatagramProtector = new HmacDatagramProtector(ClusterKey)
+    };
+
+    [TestMethod]
+    public async Task AuthenticatedAnnouncements_AreProtectedOnTheWire()
+    {
+        var channel = new FakeChannel();
+
+        using var discovery = new MulticastNodeDiscovery(
+            AuthenticatedConfiguration(),
+            Options(announce: TimeSpan.FromMilliseconds(20)),
+            channel: channel);
+
+        Assert.IsTrue(await WaitForAsync(() => channel.SentRaw.Count > 0));
+
+        var verifier = new HmacDatagramProtector(ClusterKey);
+
+        Assert.IsTrue(verifier.TryUnprotect(channel.SentRaw[0], out var payload));
+        Assert.AreEqual(MulticastNodeDiscovery.Encode("10.0.0.1", 9055), Encoding.UTF8.GetString(payload));
+    }
+
+    [TestMethod]
+    public async Task AuthenticatedAnnouncement_FromAPeer_IsAccepted()
+    {
+        var channel = new FakeChannel();
+
+        using var discovery = new MulticastNodeDiscovery(AuthenticatedConfiguration(), Options(), channel: channel);
+
+        var peer = new HmacDatagramProtector(ClusterKey);
+        channel.Deliver(peer.Protect(Encoding.UTF8.GetBytes(MulticastNodeDiscovery.Encode("10.0.0.9", 9055))));
+
+        Assert.IsTrue(await WaitForAsync(() => discovery.KnownPeerCount == 1));
+        Assert.AreEqual("10.0.0.9:9055", (await discovery.GetNeighboursAsync())[0].ToString());
+    }
+
+    [TestMethod]
+    public async Task UnauthenticatedAnnouncements_AreRejectedWhenAKeyIsSet()
+    {
+        var channel = new FakeChannel();
+
+        using var discovery = new MulticastNodeDiscovery(AuthenticatedConfiguration(), Options(), channel: channel);
+
+        // A plaintext announcement, and one signed with the wrong key: either would
+        // let anything on the LAN insert a fake peer.
+        channel.Deliver(MulticastNodeDiscovery.Encode("10.6.6.6", 9055));
+
+        var attacker = new HmacDatagramProtector(Encoding.UTF8.GetBytes("attacker-key-9876543210abcdef"));
+        channel.Deliver(attacker.Protect(Encoding.UTF8.GetBytes(MulticastNodeDiscovery.Encode("10.6.6.7", 9055))));
+
+        // A legitimate one behind them, proving the forgeries were dropped in place.
+        var peer = new HmacDatagramProtector(ClusterKey);
+        channel.Deliver(peer.Protect(Encoding.UTF8.GetBytes(MulticastNodeDiscovery.Encode("10.0.0.9", 9055))));
+
+        Assert.IsTrue(await WaitForAsync(() => discovery.KnownPeerCount > 0));
+
+        var neighbours = await discovery.GetNeighboursAsync();
+
+        Assert.AreEqual(1, neighbours.Count, "only the authenticated peer may be learned");
+        Assert.AreEqual("10.0.0.9:9055", neighbours[0].ToString());
     }
 
     private sealed class SocketFault : Exception;

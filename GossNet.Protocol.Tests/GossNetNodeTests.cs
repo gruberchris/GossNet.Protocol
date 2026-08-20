@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using GossNet.Protocol.Tests.Mocks;
@@ -333,6 +334,198 @@ public class GossNetNodeTests
         Assert.AreEqual("still-working", received.Message.Data);
     }
 
+    [TestMethod]
+    public async Task MalformedDatagrams_DoNotTriggerTheFailureBackoff()
+    {
+        using var subscription = _node.Subscribe();
+
+        _node.Start();
+
+        // A stream of junk used to count as consecutive loop failures, so ten of
+        // these accumulated over twenty seconds of exponential backoff before the
+        // real message behind them was even received — a trivially cheap way for
+        // stray traffic to stall a node.
+        for (var i = 0; i < 10; i++)
+        {
+            _udpClient.EnqueueReceive("junk"u8.ToArray());
+        }
+
+        _udpClient.EnqueueReceive(Datagram(new TestMessage { Data = "behind-the-junk" }));
+
+        var sw = Stopwatch.StartNew();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var received = await subscription.Reader.ReadAsync(cts.Token);
+        sw.Stop();
+
+        Assert.AreEqual("behind-the-junk", received.Message.Data);
+        Assert.IsTrue(sw.ElapsedMilliseconds < 3000,
+            $"junk datagrams delayed a real message by {sw.ElapsedMilliseconds}ms; they must be dropped without backoff");
+    }
+
+    [TestMethod]
+    public async Task DiscoveryFailure_WhileForwarding_DoesNotStallTheReceiveLoop()
+    {
+        var configuration = new GossNetConfiguration
+        {
+            Hostname = "self",
+            Port = 9100,
+            DiscoveryProvider = new ThrowingDiscovery()
+        };
+
+        var udpClient = new MockUdpClient();
+        using var node = new GossNetNode<TestMessage>(configuration, _logger, udpClient);
+        using var subscription = node.Subscribe();
+
+        node.Start();
+        udpClient.EnqueueReceive(Datagram(new TestMessage { Data = "first" }));
+        udpClient.EnqueueReceive(Datagram(new TestMessage { Data = "second" }));
+
+        // Both messages must reach subscribers promptly even though every forward
+        // fails: a discovery outage is a fan-out problem, not a receive problem.
+        foreach (var expected in new[] { "first", "second" })
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var received = await subscription.Reader.ReadAsync(cts.Token);
+
+            Assert.AreEqual(expected, received.Message.Data);
+        }
+    }
+
+    private sealed class ThrowingDiscovery : INodeDiscovery
+    {
+        public ValueTask<IReadOnlyList<GossNetNodeHostEntry>> GetNeighboursAsync(CancellationToken cancellationToken = default) =>
+            throw new NodeDiscoveryException("backend unreachable");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Authentication.
+    // ---------------------------------------------------------------------------
+
+    private static readonly byte[] ClusterKey = Encoding.UTF8.GetBytes("cluster-shared-key-0123456789");
+
+    private static GossNetNode<TestMessage> AuthenticatedNode(MockUdpClient udpClient, TimeSpan? maxAge = null)
+    {
+        var configuration = new GossNetConfiguration
+        {
+            Hostname = "self",
+            Port = 9100,
+            NodeDiscovery = NodeDiscovery.StaticList,
+            StaticNodes = [NeighbourA],
+            DatagramProtector = new HmacDatagramProtector(ClusterKey),
+            MessageMaxAge = maxAge
+        };
+
+        return new GossNetNode<TestMessage>(configuration, udpClient: udpClient);
+    }
+
+    [TestMethod]
+    public async Task AuthenticatedNodes_ExchangeMessages()
+    {
+        var udpClient = new MockUdpClient();
+        await using var node = AuthenticatedNode(udpClient);
+        using var subscription = node.Subscribe();
+
+        node.Start();
+
+        // What one authenticated node sends, another accepts: feed a sent datagram
+        // straight back in as if a peer had produced it.
+        await node.SendAsync(new TestMessage { Data = "outbound" });
+        Assert.AreEqual(1, udpClient.SentPackets.Count);
+
+        var peerProtector = new HmacDatagramProtector(ClusterKey);
+        var inbound = peerProtector.Protect(Datagram(new TestMessage { Data = "inbound" }));
+        udpClient.EnqueueReceive(inbound);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var received = await subscription.Reader.ReadAsync(cts.Token);
+
+        Assert.AreEqual("inbound", received.Message.Data);
+    }
+
+    [TestMethod]
+    public async Task AuthenticatedNode_DropsPlaintextAndForgedDatagrams()
+    {
+        var udpClient = new MockUdpClient();
+        await using var node = AuthenticatedNode(udpClient);
+        using var subscription = node.Subscribe();
+
+        node.Start();
+
+        // A plaintext message, and one signed with the wrong key.
+        udpClient.EnqueueReceive(Datagram(new TestMessage { Data = "plaintext-injection" }));
+
+        var attacker = new HmacDatagramProtector(Encoding.UTF8.GetBytes("attacker-key-9876543210abcdef"));
+        udpClient.EnqueueReceive(attacker.Protect(Datagram(new TestMessage { Data = "forged" })));
+
+        // Followed by a legitimate one, proving the junk was dropped without stalling.
+        var peer = new HmacDatagramProtector(ClusterKey);
+        udpClient.EnqueueReceive(peer.Protect(Datagram(new TestMessage { Data = "legitimate" })));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var received = await subscription.Reader.ReadAsync(cts.Token);
+
+        Assert.AreEqual("legitimate", received.Message.Data, "only the authenticated message may be delivered");
+        Assert.IsFalse(subscription.Reader.TryRead(out _), "the plaintext and forged messages must not be delivered");
+    }
+
+    [TestMethod]
+    public async Task AuthenticatedSend_TransmitsProtectedDatagrams()
+    {
+        var udpClient = new MockUdpClient();
+        await using var node = AuthenticatedNode(udpClient);
+
+        await node.SendAsync(new TestMessage { Data = "wire-check" });
+
+        var verifier = new HmacDatagramProtector(ClusterKey);
+
+        Assert.AreEqual(1, udpClient.SentPackets.Count);
+        Assert.IsTrue(verifier.TryUnprotect(udpClient.SentPackets[0].Datagram, out _),
+            "outgoing datagrams must carry a valid frame");
+    }
+
+    [TestMethod]
+    public async Task StaleMessage_IsDroppedWhenAuthenticated()
+    {
+        var udpClient = new MockUdpClient();
+        await using var node = AuthenticatedNode(udpClient, maxAge: TimeSpan.FromMinutes(5));
+        using var subscription = node.Subscribe();
+
+        node.Start();
+
+        var peer = new HmacDatagramProtector(ClusterKey);
+
+        // A captured datagram replayed after its id has left the dedup cache would
+        // otherwise be accepted as new; the freshness window closes that gap.
+        var stale = new TestMessage { Data = "replayed" };
+        stale.Timestamp = DateTime.UtcNow.AddMinutes(-10);
+        udpClient.EnqueueReceive(peer.Protect(Datagram(stale)));
+
+        udpClient.EnqueueReceive(peer.Protect(Datagram(new TestMessage { Data = "fresh" })));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var received = await subscription.Reader.ReadAsync(cts.Token);
+
+        Assert.AreEqual("fresh", received.Message.Data, "the stale message must be dropped");
+        Assert.IsFalse(subscription.Reader.TryRead(out _));
+    }
+
+    [TestMethod]
+    public async Task OversizedAuthenticatedMessage_ThrowsAClearError()
+    {
+        var udpClient = new MockUdpClient();
+        await using var node = AuthenticatedNode(udpClient);
+
+        // The size check runs against the protected datagram, so the frame's overhead
+        // counts toward the limit and the error says so.
+        var message = new TestMessage { Data = new string('x', GossNetMessageBase.MaxDatagramBytes + 1) };
+
+        var exception = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            async () => await node.SendAsync(message));
+
+        StringAssert.Contains(exception.Message, "protection overhead");
+        Assert.AreEqual(0, udpClient.SentPackets.Count);
+    }
+
     // ---------------------------------------------------------------------------
     // Gossip behaviour.
     // ---------------------------------------------------------------------------
@@ -394,6 +587,65 @@ public class GossNetNodeTests
         var sent = await _node.SendAsync(message);
 
         Assert.AreEqual(2, sent);
+    }
+
+    [TestMethod]
+    public async Task SendAsync_OneUnreachableNeighbour_DoesNotStopTheOthers()
+    {
+        _udpClient.SendFault = hostname => hostname == "neighbour-a" ? new SocketException() : null;
+
+        var sent = await _node.SendAsync(new TestMessage { Data = "hello" });
+
+        Assert.AreEqual(1, sent);
+        Assert.AreEqual(1, _udpClient.SentPackets.Count);
+        Assert.AreEqual("neighbour-b", _udpClient.SentPackets[0].Hostname);
+    }
+
+    [TestMethod]
+    public async Task AddRecipientsToNotifiedNodes_ListsRecipientsInTheTransmittedMessage()
+    {
+        var configuration = new GossNetConfiguration
+        {
+            Hostname = "self",
+            Port = 9100,
+            NodeDiscovery = NodeDiscovery.StaticList,
+            StaticNodes = [NeighbourA, NeighbourB],
+            AddRecipientsToNotifiedNodes = true
+        };
+
+        var udpClient = new MockUdpClient();
+        await using var node = new GossNetNode<TestMessage>(configuration, udpClient: udpClient);
+
+        await node.SendAsync(new TestMessage { Data = "hello" });
+
+        Assert.AreEqual(2, udpClient.SentPackets.Count);
+
+        // Every transmitted copy lists both recipients, so neither echoes to the other.
+        foreach (var packet in udpClient.SentPackets)
+        {
+            var onTheWire = new TestMessage();
+            onTheWire.Deserialize(Encoding.UTF8.GetString(packet.Datagram));
+
+            var notified = onTheWire.NotifiedNodes.Select(n => n.ToString()).ToArray();
+
+            CollectionAssert.Contains(notified, "neighbour-a:9101");
+            CollectionAssert.Contains(notified, "neighbour-b:9102");
+            CollectionAssert.Contains(notified, "self:9100");
+        }
+    }
+
+    [TestMethod]
+    public async Task DefaultBehaviour_DoesNotListRecipients()
+    {
+        await _node.SendAsync(new TestMessage { Data = "hello" });
+
+        var onTheWire = new TestMessage();
+        onTheWire.Deserialize(Encoding.UTF8.GetString(_udpClient.SentPackets[0].Datagram));
+
+        // Off by default: the echo redundancy is what delivers through datagram loss.
+        CollectionAssert.AreEqual(
+            new[] { "self:9100" },
+            onTheWire.NotifiedNodes.Select(n => n.ToString()).ToArray());
     }
 
     [TestMethod]

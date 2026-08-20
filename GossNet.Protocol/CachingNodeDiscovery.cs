@@ -7,9 +7,24 @@ namespace GossNet.Protocol;
 /// result cache.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Discovery runs on the message path, so an uncached provider issues a backend call for
 /// every message sent. Deriving providers implement <see cref="ResolveAsync"/> and get
 /// caching for free.
+/// </para>
+/// <para>
+/// Refreshes are single-flight: when the cache expires under concurrent senders, one
+/// caller queries the backend and the rest reuse its result rather than each issuing
+/// their own query.
+/// </para>
+/// <para>
+/// When a refresh fails and a previous result exists, the previous result is served and
+/// the failure is not surfaced: membership that is slightly stale keeps the cluster
+/// gossiping through a backend outage, which is strictly better than every message
+/// failing. The failure is surfaced only when there has never been a successful resolve,
+/// because then an unreachable backend would be indistinguishable from a network with
+/// nobody else in it.
+/// </para>
 /// </remarks>
 public abstract class CachingNodeDiscovery : INodeDiscovery
 {
@@ -17,6 +32,9 @@ public abstract class CachingNodeDiscovery : INodeDiscovery
     public static readonly TimeSpan DefaultCacheDuration = TimeSpan.FromSeconds(30);
 
     private readonly TimeSpan _cacheDuration;
+
+    /// <summary>Makes cache refreshes single-flight.</summary>
+    private readonly SemaphoreSlim _refreshGate = new(1, 1);
 
 #if NET9_0_OR_GREATER
     private readonly Lock _gate = new();
@@ -37,20 +55,61 @@ public abstract class CachingNodeDiscovery : INodeDiscovery
     /// <inheritdoc />
     public async ValueTask<IReadOnlyList<GossNetNodeHostEntry>> GetNeighboursAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (TryGetFresh(out var cached))
         {
             return cached;
         }
 
-        var neighbours = await ResolveAsync(cancellationToken).ConfigureAwait(false);
+        await _refreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-        lock (_gate)
+        try
         {
-            _cached = neighbours;
-            _cachedAt = Stopwatch.GetTimestamp();
-        }
+            // Whoever held the gate first may have already refreshed the cache.
+            if (TryGetFresh(out cached))
+            {
+                return cached;
+            }
 
-        return neighbours;
+            IReadOnlyList<GossNetNodeHostEntry> neighbours;
+
+            try
+            {
+                neighbours = await ResolveAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                lock (_gate)
+                {
+                    // Serve the previous list rather than failing every message for the
+                    // duration of a backend outage. _cachedAt is deliberately not
+                    // refreshed, so the next call tries the backend again.
+                    if (_cachedAt != long.MinValue)
+                    {
+                        return _cached;
+                    }
+                }
+
+                throw;
+            }
+
+            lock (_gate)
+            {
+                _cached = neighbours;
+                _cachedAt = Stopwatch.GetTimestamp();
+            }
+
+            return neighbours;
+        }
+        finally
+        {
+            _refreshGate.Release();
+        }
     }
 
     /// <summary>

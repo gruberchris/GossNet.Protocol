@@ -55,6 +55,12 @@ public sealed class MulticastNodeDiscovery : INodeDiscovery, IDisposable
     private readonly ILogger _logger;
     private readonly bool _ownsChannel;
     private readonly byte[] _announcement;
+
+    /// <summary>
+    /// The node's protector, applied to announcements too. Without it, anything on the
+    /// LAN could forge an announcement and insert a fake peer into the neighbour list.
+    /// </summary>
+    private readonly IDatagramProtector? _protector;
     private readonly CancellationTokenSource _cancellation = new();
     private readonly Dictionary<GossNetNodeHostEntry, long> _lastSeen = [];
 
@@ -84,7 +90,10 @@ public sealed class MulticastNodeDiscovery : INodeDiscovery, IDisposable
         _ownsChannel = channel is null;
         _channel = channel ?? new UdpMulticastChannel(_options);
 
-        _announcement = Encoding.UTF8.GetBytes(Encode(configuration.Hostname, configuration.Port));
+        _protector = configuration.DatagramProtector;
+
+        var announcement = Encoding.UTF8.GetBytes(Encode(configuration.Hostname, configuration.Port));
+        _announcement = _protector is null ? announcement : _protector.Protect(announcement);
 
         var token = _cancellation.Token;
 
@@ -128,16 +137,9 @@ public sealed class MulticastNodeDiscovery : INodeDiscovery, IDisposable
             return false;
         }
 
-        string text;
-
-        try
-        {
-            text = Encoding.UTF8.GetString(datagram);
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
+        // GetString never throws for invalid sequences — it substitutes U+FFFD, which
+        // simply fails the protocol match below.
+        var text = Encoding.UTF8.GetString(datagram);
 
         var parts = text.Split(' ');
 
@@ -255,6 +257,19 @@ public sealed class MulticastNodeDiscovery : INodeDiscovery, IDisposable
                 }
 
                 continue;
+            }
+
+            // With a protector, unauthenticated announcements are rejected outright:
+            // otherwise anything on the LAN could insert a fake peer.
+            if (_protector is not null)
+            {
+                if (!_protector.TryUnprotect(datagram, out var payload))
+                {
+                    _logger.LogDebug("Dropping unauthenticated {Bytes}-byte multicast announcement", datagram.Length);
+                    continue;
+                }
+
+                datagram = payload;
             }
 
             if (!TryDecode(datagram, out var peer) || IsSelf(peer))

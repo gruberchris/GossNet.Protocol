@@ -1,3 +1,6 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Net;
 using System.Net.Sockets;
 #if !NET6_0_OR_GREATER
 using System.Runtime.InteropServices;
@@ -8,9 +11,74 @@ namespace GossNet.Protocol;
 /// <summary>
 /// Default <see cref="IUdpClient"/> implementation, backed by <see cref="UdpClient"/>.
 /// </summary>
-public sealed class UdpClientAdapter(int port) : IUdpClient
+/// <remarks>
+/// <para>
+/// The socket is dual-mode where the host supports it, so neighbours advertised by
+/// IPv6 addresses — which DNS discovery legitimately produces — are reachable. Hosts
+/// with IPv6 disabled fall back to an IPv4-only socket, which is what this adapter
+/// always was before.
+/// </para>
+/// <para>
+/// Destination hostnames are resolved through a short-lived cache: the UdpClient
+/// hostname overloads resolve DNS on every call, which on the send path meant one
+/// lookup per neighbour per message. IP literals bypass resolution entirely.
+/// </para>
+/// </remarks>
+public sealed class UdpClientAdapter : IUdpClient
 {
-    private readonly UdpClient _client = new(port);
+    /// <summary>
+    /// How long a resolved address is reused. Matches the discovery providers' default
+    /// cache duration, so staleness is no worse than membership already is.
+    /// </summary>
+    private static readonly TimeSpan ResolutionLifetime = TimeSpan.FromSeconds(30);
+
+    private readonly UdpClient _client;
+
+    /// <summary>Binds the gossip socket.</summary>
+    /// <param name="port">The UDP port to listen on.</param>
+    /// <param name="receiveBufferSize">
+    /// Socket receive buffer size in bytes, or null for the OS default. A burst of
+    /// datagrams arriving faster than the node processes them queues here; overflow is
+    /// silently dropped by the OS, so bursty workloads benefit from a larger buffer.
+    /// The OS may round or cap the value, and some systems reject values above their
+    /// limit, which surfaces as a <see cref="SocketException"/>.
+    /// </param>
+    public UdpClientAdapter(int port, int? receiveBufferSize = null)
+    {
+        _client = CreateClient(port);
+
+        if (receiveBufferSize is { } size)
+        {
+            _client.Client.ReceiveBufferSize = size;
+        }
+    }
+
+    /// <summary>
+    /// Gets the socket's actual receive buffer size in bytes, after any OS rounding.
+    /// </summary>
+    public int ReceiveBufferSize => _client.Client.ReceiveBufferSize;
+
+    private static UdpClient CreateClient(int port)
+    {
+        try
+        {
+            // DualMode must be set before the bind, which rules out the binding
+            // UdpClient constructors.
+            var client = new UdpClient(AddressFamily.InterNetworkV6);
+            client.Client.DualMode = true;
+            client.Client.Bind(new IPEndPoint(IPAddress.IPv6Any, port));
+
+            return client;
+        }
+        catch (Exception ex) when (ex is SocketException or NotSupportedException)
+        {
+            // No IPv6 on this host.
+            return new UdpClient(port);
+        }
+    }
+
+    private readonly ConcurrentDictionary<string, (IPAddress Address, long ResolvedAt)> _resolved =
+        new(StringComparer.OrdinalIgnoreCase);
 
     /// <inheritdoc />
     public bool EnableBroadcast
@@ -19,14 +87,64 @@ public sealed class UdpClientAdapter(int port) : IUdpClient
         set => _client.EnableBroadcast = value;
     }
 
+    private async ValueTask<IPAddress> ResolveAsync(string hostname, CancellationToken cancellationToken)
+    {
+        if (IPAddress.TryParse(hostname, out var literal))
+        {
+            return literal;
+        }
+
+        var now = Stopwatch.GetTimestamp();
+
+        if (_resolved.TryGetValue(hostname, out var cached) &&
+            TimeSpan.FromSeconds((double)(now - cached.ResolvedAt) / Stopwatch.Frequency) < ResolutionLifetime)
+        {
+            return cached.Address;
+        }
+
+#if NET6_0_OR_GREATER
+        var addresses = await Dns.GetHostAddressesAsync(hostname, cancellationToken).ConfigureAwait(false);
+#else
+        cancellationToken.ThrowIfCancellationRequested();
+        var addresses = await Dns.GetHostAddressesAsync(hostname).ConfigureAwait(false);
+#endif
+
+        var address = SelectAddress(addresses)
+            ?? throw new SocketException((int)SocketError.HostNotFound);
+
+        _resolved[hostname] = (address, now);
+
+        return address;
+    }
+
+    /// <summary>Picks an address the socket can actually send to.</summary>
+    private IPAddress? SelectAddress(IPAddress[] addresses)
+    {
+        var family = _client.Client.AddressFamily;
+
+        foreach (var address in addresses)
+        {
+            if (address.AddressFamily == family)
+            {
+                return address;
+            }
+        }
+
+        return addresses.Length > 0 ? addresses[0] : null;
+    }
+
 #if NET6_0_OR_GREATER
     /// <inheritdoc />
     public ValueTask<UdpReceiveResult> ReceiveAsync(CancellationToken cancellationToken) =>
         _client.ReceiveAsync(cancellationToken);
 
     /// <inheritdoc />
-    public ValueTask<int> SendAsync(ReadOnlyMemory<byte> datagram, string hostname, int port, CancellationToken cancellationToken) =>
-        _client.SendAsync(datagram, hostname, port, cancellationToken);
+    public async ValueTask<int> SendAsync(ReadOnlyMemory<byte> datagram, string hostname, int port, CancellationToken cancellationToken)
+    {
+        var address = await ResolveAsync(hostname, cancellationToken).ConfigureAwait(false);
+
+        return await _client.SendAsync(datagram, new IPEndPoint(address, port), cancellationToken).ConfigureAwait(false);
+    }
 #else
     // netstandard2.0 has no cancellable UdpClient overloads, so cancellation is
     // layered on top with Task.WhenAny.
@@ -51,13 +169,15 @@ public sealed class UdpClientAdapter(int port) : IUdpClient
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        var address = await ResolveAsync(hostname, cancellationToken).ConfigureAwait(false);
+
         // Avoid a copy when the memory is already array-backed, which it always is
         // on the send path inside this library.
         var buffer = MemoryMarshal.TryGetArray(datagram, out var segment) && segment.Array is not null && segment.Offset == 0
             ? segment.Array
             : datagram.ToArray();
 
-        var send = _client.SendAsync(buffer, datagram.Length, hostname, port);
+        var send = _client.SendAsync(buffer, datagram.Length, new IPEndPoint(address, port));
         await AwaitWithCancellationAsync(send, cancellationToken).ConfigureAwait(false);
         return await send.ConfigureAwait(false);
     }

@@ -39,6 +39,12 @@ public class GossNetMessageBase
     /// </summary>
     /// <param name="data">The serialized message.</param>
     /// <exception cref="JsonException">The payload could not be read.</exception>
+    /// <remarks>
+    /// <strong>Restores only the base properties</strong> — id, timestamp and notified
+    /// nodes — while <see cref="Serialize"/> writes the whole derived object. A derived
+    /// type MUST override this, call <c>base.Deserialize(data)</c>, and then restore its
+    /// own properties; otherwise they are silently lost on every received message.
+    /// </remarks>
     public virtual void Deserialize(string data)
     {
         var deserialized = JsonSerializer.Deserialize<BaseProperties>(data, DeserializeOptions)

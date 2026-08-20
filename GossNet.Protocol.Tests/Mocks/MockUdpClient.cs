@@ -30,6 +30,9 @@ public sealed class MockUdpClient : IUdpClient
     /// <summary>When set, every receive throws the produced exception.</summary>
     public Func<Exception>? ReceiveFault { get; set; }
 
+    /// <summary>When set and returning non-null for a hostname, that send throws.</summary>
+    public Func<string, Exception?>? SendFault { get; set; }
+
     public IReadOnlyList<SentPacket> SentPackets => _sentPackets.ToArray();
 
     public void EnqueueReceive(byte[] datagram, IPEndPoint? remoteEndPoint = null) =>
@@ -50,6 +53,12 @@ public sealed class MockUdpClient : IUdpClient
     public ValueTask<int> SendAsync(ReadOnlyMemory<byte> datagram, string hostname, int port, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+
+        if (SendFault?.Invoke(hostname) is { } fault)
+        {
+            throw fault;
+        }
+
         _sentPackets.Enqueue(new SentPacket(datagram.ToArray(), hostname, port));
 
         return new ValueTask<int>(datagram.Length);

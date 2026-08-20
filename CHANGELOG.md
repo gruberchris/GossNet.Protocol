@@ -6,6 +6,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 version is below 1.0.0, breaking changes ship in minor releases.
 
+## [0.10.0]
+
+Message authentication, and a round of resiliency and performance fixes from a full code
+review. No breaking API changes; authentication is opt-in and everything else preserves
+existing behavior.
+
+### Added
+
+- **Opt-in message authentication.** `GossNetConfiguration.DatagramProtector` takes an
+  `IDatagramProtector`; the built-in `HmacDatagramProtector` authenticates every gossip
+  message *and* every multicast discovery announcement with HMAC-SHA256 under a shared
+  key (35 bytes overhead per datagram, constant-time verification, verify-only accepted
+  keys for rotation). Unauthenticated or forged datagrams are dropped before they are
+  parsed. Without a key, the wire format is unchanged plaintext.
+- `GossNetConfiguration.MessageMaxAge`: when authenticated, messages older than this
+  window (default `MessageTtlSeconds`) are rejected, closing the replay gap after a
+  message id leaves the de-duplication cache.
+- `GossNetConfiguration.AddRecipientsToNotifiedNodes` (default off): records fan-out
+  targets in the notified list before sending so recipients do not echo the message to
+  each other, cutting redundant traffic in densely connected clusters at some cost in
+  loss robustness.
+- `GossNetConfiguration.ReceiveBufferSize`: sizes the socket receive buffer, where
+  datagrams queue between arriving and being processed. Bursts that outrun processing
+  overflow the OS default (under 1 MB on some systems) and the excess is silently
+  dropped; gossip tolerates the loss, but bursty workloads recover faster with a
+  larger buffer.
+
+### Fixed
+
+- Junk datagrams no longer trip the receive loop's failure backoff — a stream of garbage
+  UDP could previously stall real messages for seconds per packet. Parse failures are
+  dropped without delay; backoff now applies only to socket-level failures.
+- A discovery backend outage no longer stalls the receive loop: forwarding failures are
+  contained per message, and providers deriving from `CachingNodeDiscovery` serve their
+  last known neighbour list while the backend is unreachable.
+- A watch that ends or faults is re-established with backoff instead of silently
+  downgrading the node to cached polling for the rest of its life.
+- `EtcdRegistry` re-registers after losing its lease (etcd restart, partition outlasting
+  the TTL); previously the node stayed permanently invisible to peers until restarted.
+- Concurrent etcd registration attempts now share one in-flight registration.
+- `UdpClientAdapter` binds a dual-mode socket where supported, so IPv6 neighbours from
+  DNS discovery are actually reachable; hosts without IPv6 keep the IPv4-only socket.
+
+### Changed (performance)
+
+- The send fan-out runs in parallel (capped at 32 in-flight sends) instead of one
+  neighbour at a time behind a node-wide lock.
+- Destination hostnames are resolved through a 30-second cache instead of one DNS lookup
+  per neighbour per message; IP literals skip resolution entirely.
+- Discovery cache refreshes are single-flight: concurrent senders on an expired cache
+  share one backend query.
+- Kubernetes and etcd watch events are coalesced, so a burst (a rolling deploy) triggers
+  one re-list instead of one per event.
+
 ## [0.9.0]
 
 No functional change from 0.8.2. The Kubernetes watch below was released as 0.8.2 by

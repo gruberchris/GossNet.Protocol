@@ -169,6 +169,74 @@ preferable to stalling.
 
 A node with no subscribers buffers nothing at all.
 
+## Security
+
+GossNet is designed for **trusted networks**: the wire format is plain UDP, so by default
+anything that can reach a node's port can inject messages into its subscribers — and, with
+peer-exchange discovery, poison its peer table.
+
+To authenticate traffic, give every node the same key:
+
+```csharp
+var configuration = new GossNetConfiguration
+{
+    Hostname = "10.0.0.4",
+    Port = 9055,
+    DatagramProtector = new HmacDatagramProtector(clusterKey)
+};
+```
+
+When a protector is configured:
+
+- Every outgoing message (and multicast discovery announcement) carries an HMAC-SHA256
+  frame; 35 bytes of overhead per datagram.
+- Every received datagram that fails verification — plaintext, tampered, or signed with
+  the wrong key — is dropped before it is even parsed.
+- Messages older than `MessageMaxAge` (default: `MessageTtlSeconds`) are rejected, closing
+  the replay window after a message id has left the de-duplication cache. This assumes
+  reasonably synchronized clocks; only *stale* messages are rejected, so a peer with a
+  fast clock is tolerated.
+
+What this provides — and what it does not:
+
+- **Authenticity and integrity**, not confidentiality: payloads remain readable on the
+  wire. If eavesdropping matters, implement `IDatagramProtector` with authenticated
+  encryption and supply that instead.
+- **One trust domain per cluster**: every key holder can produce messages
+  indistinguishable from any other member's.
+
+**Key rotation** without a simultaneous cluster-wide restart: first roll the new key out
+everywhere as an accepted key (`new HmacDatagramProtector(oldKey, acceptedKeys: [newKey])`),
+then promote it to primary everywhere (`new HmacDatagramProtector(newKey, acceptedKeys:
+[oldKey])`), then drop the old key.
+
+All nodes must agree: a node without a protector cannot talk to nodes with one.
+
+## Resiliency
+
+Nodes are built to keep gossiping through infrastructure trouble:
+
+- Junk datagrams are dropped without slowing the receive loop; error backoff is reserved
+  for socket-level failures.
+- Discovery providers that query a backend serve their last known neighbour list while the
+  backend is unreachable, and re-resolve as soon as it recovers.
+- Providers with a change feed (etcd, Consul, Kubernetes) re-establish a broken watch with
+  backoff, polling in the meantime; the etcd provider also re-registers itself if its
+  lease is lost.
+
+A burst of messages can outrun consumption at two points, and each has its own knob:
+
+- **The subscriber queue** (`SubscriberQueueCapacity`, default 1024): when a subscriber
+  reads slower than messages arrive, its oldest buffered message is dropped and a warning
+  is logged. This is the limit a burst hits first in practice — check for the warning
+  before suspecting the network.
+- **The OS socket buffer** (`ReceiveBufferSize`): datagrams queue here between arriving
+  and the node reading them one at a time. Overflow is dropped silently by the OS, and
+  the default is under 1&nbsp;MB on some systems.
+
+Gossip tolerates loss by design — other nodes re-deliver — but bursty workloads recover
+faster with both raised.
+
 ## Message size
 
 Messages travel in a single UDP datagram, so a serialized message must fit within
