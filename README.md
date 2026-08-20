@@ -212,6 +212,7 @@ even in case of partial network failures.
 | Azure         | Discover virtual machines by tag             |         | `GossNet.Discovery.Azure`      |
 | Consul        | Discover nodes using Consul                  |         | `GossNet.Discovery.Consul`     |
 | Docker        | Discover nodes using Docker                  |         | `GossNet.Discovery.Docker`     |
+| Google Cloud  | Discover Compute Engine instances by label   |         | `GossNet.Discovery.Gcp`        |
 | etcd          | Register under a lease, discover by prefix   | ✅      | `GossNet.Discovery.Etcd`       |
 | Kubernetes    | Discover nodes using Kubernetes              |         | `GossNet.Discovery.Kubernetes` |
 | Redis         | Heartbeat into a shared sorted set           |         | `GossNet.Discovery.Redis`      |
@@ -229,6 +230,7 @@ dotnet add package GossNet.Discovery.Azure
 dotnet add package GossNet.Discovery.Consul
 dotnet add package GossNet.Discovery.Docker
 dotnet add package GossNet.Discovery.Etcd
+dotnet add package GossNet.Discovery.Gcp
 dotnet add package GossNet.Discovery.Kubernetes
 dotnet add package GossNet.Discovery.Redis
 ```

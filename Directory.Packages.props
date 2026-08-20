@@ -33,6 +33,7 @@
         <PackageVersion Include="Consul" Version="1.8.0" />
         <PackageVersion Include="Docker.DotNet" Version="3.125.15" />
         <PackageVersion Include="dotnet-etcd" Version="9.1.0" />
+        <PackageVersion Include="Google.Cloud.Compute.V1" Version="3.30.0" />
         <PackageVersion Include="KubernetesClient" Version="19.0.2" />
         <PackageVersion Include="StackExchange.Redis" Version="3.1.13" />
     </ItemGroup>
