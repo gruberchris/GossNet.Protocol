@@ -8,6 +8,11 @@ version is below 1.0.0, breaking changes ship in minor releases.
 
 ## [0.9.0]
 
+No functional change from 0.8.2. The Kubernetes watch below was released as 0.8.2 by
+mistake — that commit was missing its `+semver: minor` marker, so GitVersion took a patch
+bump and a feature shipped under a fix number. 0.9.0 re-releases the same code under the
+version it should have had.
+
 ### Added
 
 - `KubernetesNodeDiscovery` now implements `IWatchableNodeDiscovery`, so a pod joining or
@@ -17,6 +22,18 @@ version is below 1.0.0, breaking changes ship in minor releases.
   unaffected; `KubernetesPodLookup` implements both. A lookup without it leaves the node on
   cached polling.
 - k3s integration tests covering the pod watch, alongside the existing Consul ones.
+
+## [0.8.2]
+
+The 0.9.0 additions above, released under a patch number in error. Functionally identical to
+0.9.0; prefer 0.9.0 so the version reflects that it carries a feature.
+
+## [0.8.1]
+
+Documentation only. The README was audited against the code: it had claimed that a node
+delivers its own sent messages to its own subscribers, which it does not — only received
+messages reach subscribers. The Features list, the upgrade section, the logging example and
+the custom-discovery notes were also brought up to date.
 
 ## [0.8.0]
 
