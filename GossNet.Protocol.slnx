@@ -1,0 +1,23 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/src/">
+    <Project Path="GossNet.Protocol/GossNet.Protocol.csproj" />
+    <Project Path="GossNet.Discovery.Aws/GossNet.Discovery.Aws.csproj" />
+    <Project Path="GossNet.Discovery.Azure/GossNet.Discovery.Azure.csproj" />
+    <Project Path="GossNet.Discovery.Consul/GossNet.Discovery.Consul.csproj" />
+    <Project Path="GossNet.Discovery.Docker/GossNet.Discovery.Docker.csproj" />
+    <Project Path="GossNet.Discovery.Etcd/GossNet.Discovery.Etcd.csproj" />
+    <Project Path="GossNet.Discovery.Gcp/GossNet.Discovery.Gcp.csproj" />
+    <Project Path="GossNet.Discovery.Kubernetes/GossNet.Discovery.Kubernetes.csproj" />
+    <Project Path="GossNet.Discovery.Redis/GossNet.Discovery.Redis.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="GossNet.Protocol.Tests/GossNet.Protocol.Tests.csproj" />
+    <Project Path="GossNet.Discovery.Tests/GossNet.Discovery.Tests.csproj" />
+    <Project Path="GossNet.Discovery.IntegrationTests/GossNet.Discovery.IntegrationTests.csproj" />
+  </Folder>
+</Solution>
