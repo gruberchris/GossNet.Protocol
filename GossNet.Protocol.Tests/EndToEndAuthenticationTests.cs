@@ -25,9 +25,16 @@ public sealed class EndToEndAuthenticationTests
     [TestMethod]
     public async Task AuthenticatedNodes_ExchangeOverRealSockets_AndRejectAttackerTraffic()
     {
-        // Offset by runtime version because the per-framework test runs execute in
-        // parallel and must not bind the same ports.
-        var portA = 19200 + (Environment.Version.Major * 10) + 1;
+        // Offset by target framework because the per-framework test runs execute in
+        // parallel and must not bind the same ports. This uses the compile-time TFM, not
+        // Environment.Version: with RollForward=Major and no .NET 8 runtime installed, the
+        // net8.0 build runs on .NET 10 too, and the runtime versions would collide.
+#if NET10_0_OR_GREATER
+        const int frameworkOffset = 100;
+#else
+        const int frameworkOffset = 80;
+#endif
+        var portA = 19200 + frameworkOffset + 1;
         var portB = portA + 1;
 
         await using var nodeA = new GossNetNode<TestMessage>(Configuration(portA, portB));
